@@ -1,0 +1,81 @@
+name: Wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  linux-manylinux-wheel:
+    name: Linux manylinux wheel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build manylinux wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: manylinux2014
+          args: --release --out dist --manifest-path crates/fastwoe-py/Cargo.toml
+          rust-toolchain: stable
+          sccache: "true"
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-manylinux
+          path: dist
+
+  macos-wheel:
+    name: macOS wheel
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build wheel
+        run: |
+          python -m maturin build --release --out dist \
+            --manifest-path crates/fastwoe-py/Cargo.toml -i python
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos
+          path: dist
+
+  windows-wheel:
+    name: Windows wheel
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build wheel
+        run: |
+          python -m maturin build --release --out dist --manifest-path crates/fastwoe-py/Cargo.toml -i python
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows
+          path: dist
