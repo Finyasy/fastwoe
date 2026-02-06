@@ -390,6 +390,36 @@ impl MulticlassTabularWoeModel {
         Ok(all_probs.into_iter().map(|row| row[class_idx]).collect())
     }
 
+    pub fn transform_matrix_for_class(
+        &self,
+        rows: &[Vec<String>],
+        class_label: &str,
+    ) -> Result<Vec<Vec<f64>>, WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let model = self
+            .models
+            .get(class_label)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        model.transform_matrix(rows)
+    }
+
+    pub fn feature_names(&self) -> Result<&[String], WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let first_class = self
+            .class_labels
+            .first()
+            .ok_or(WoeError::MulticlassNotFitted)?;
+        let model = self
+            .models
+            .get(first_class)
+            .ok_or_else(|| WoeError::UnknownClassLabel(first_class.clone()))?;
+        model.feature_names()
+    }
+
     pub fn predict_ci_matrix(
         &self,
         rows: &[Vec<String>],
@@ -725,5 +755,29 @@ mod tests {
             .predict_ci_class(&rows, "class_0", 0.05)
             .expect("ci class should work");
         assert_eq!(ci.len(), rows.len());
+    }
+
+    #[test]
+    fn multiclass_transform_for_class_works() {
+        let rows = vec![
+            vec!["A".to_string(), "X".to_string()],
+            vec!["B".to_string(), "Y".to_string()],
+            vec!["C".to_string(), "Z".to_string()],
+        ];
+        let y = vec![
+            "class_0".to_string(),
+            "class_1".to_string(),
+            "class_0".to_string(),
+        ];
+        let feature_names = vec!["cat".to_string(), "bucket".to_string()];
+        let mut model = MulticlassTabularWoeModel::new();
+        model
+            .fit_matrix(&rows, &y, Some(&feature_names), 0.5, 0.0)
+            .expect("fit should work");
+        let transformed = model
+            .transform_matrix_for_class(&rows, "class_0")
+            .expect("class transform should work");
+        assert_eq!(transformed.len(), rows.len());
+        assert_eq!(transformed[0].len(), feature_names.len());
     }
 }
