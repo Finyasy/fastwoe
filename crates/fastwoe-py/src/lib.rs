@@ -1,4 +1,6 @@
-use fastwoe_core::{compute_binary_woe, BinaryTabularWoeModel, MulticlassTabularWoeModel};
+use fastwoe_core::{
+    compute_binary_woe, BinaryTabularWoeModel, MulticlassTabularWoeModel, PredictionCi,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -69,6 +71,15 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (categories, alpha=0.05))]
+    fn predict_ci(&self, categories: Vec<String>, alpha: f64) -> PyResult<Vec<(f64, f64, f64)>> {
+        let rows = to_single_feature_rows(&categories);
+        self.model
+            .predict_ci_matrix(&rows, alpha)
+            .map(ci_to_tuples)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     fn get_mapping(&self) -> PyResult<Vec<WoeRow>> {
         self.model
             .feature_mapping(single_feature_name())
@@ -112,6 +123,18 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (rows, alpha=0.05))]
+    fn predict_ci_matrix(
+        &self,
+        rows: Vec<Vec<String>>,
+        alpha: f64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        self.model
+            .predict_ci_matrix(&rows, alpha)
+            .map(ci_to_tuples)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     fn get_feature_names(&self) -> PyResult<Vec<String>> {
         self.model
             .feature_names()
@@ -151,6 +174,19 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (categories, alpha=0.05))]
+    fn predict_ci_multiclass(
+        &self,
+        categories: Vec<String>,
+        alpha: f64,
+    ) -> PyResult<Vec<Vec<(f64, f64, f64)>>> {
+        let rows = to_single_feature_rows(&categories);
+        self.multiclass_model
+            .predict_ci_matrix(&rows, alpha)
+            .map(|out| out.into_iter().map(ci_to_tuples).collect())
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     fn predict_proba_class(
         &self,
         categories: Vec<String>,
@@ -159,6 +195,20 @@ impl FastWoe {
         let rows = to_single_feature_rows(&categories);
         self.multiclass_model
             .predict_proba_class(&rows, &class_label)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (categories, class_label, alpha=0.05))]
+    fn predict_ci_class(
+        &self,
+        categories: Vec<String>,
+        class_label: String,
+        alpha: f64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let rows = to_single_feature_rows(&categories);
+        self.multiclass_model
+            .predict_ci_class(&rows, &class_label, alpha)
+            .map(ci_to_tuples)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -193,6 +243,18 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    #[pyo3(signature = (rows, alpha=0.05))]
+    fn predict_ci_matrix_multiclass(
+        &self,
+        rows: Vec<Vec<String>>,
+        alpha: f64,
+    ) -> PyResult<Vec<Vec<(f64, f64, f64)>>> {
+        self.multiclass_model
+            .predict_ci_matrix(&rows, alpha)
+            .map(|out| out.into_iter().map(ci_to_tuples).collect())
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     fn predict_proba_matrix_class(
         &self,
         rows: Vec<Vec<String>>,
@@ -200,6 +262,19 @@ impl FastWoe {
     ) -> PyResult<Vec<f64>> {
         self.multiclass_model
             .predict_proba_class(&rows, &class_label)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (rows, class_label, alpha=0.05))]
+    fn predict_ci_matrix_class(
+        &self,
+        rows: Vec<Vec<String>>,
+        class_label: String,
+        alpha: f64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        self.multiclass_model
+            .predict_ci_class(&rows, &class_label, alpha)
+            .map(ci_to_tuples)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -270,5 +345,12 @@ fn to_woe_rows(stats: &[fastwoe_core::CategoryStats]) -> Vec<WoeRow> {
             non_event_count: s.non_event_count,
             woe: s.woe,
         })
+        .collect()
+}
+
+fn ci_to_tuples(values: Vec<PredictionCi>) -> Vec<(f64, f64, f64)> {
+    values
+        .into_iter()
+        .map(|r| (r.prediction, r.lower_ci, r.upper_ci))
         .collect()
 }
