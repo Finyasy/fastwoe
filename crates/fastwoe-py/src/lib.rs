@@ -243,6 +243,37 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    fn transform_matrix_multiclass(&self, rows: Vec<Vec<String>>) -> PyResult<Vec<Vec<f64>>> {
+        let class_labels = self
+            .multiclass_model
+            .class_labels()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let per_class = class_labels
+            .iter()
+            .map(|class_label| {
+                self.multiclass_model
+                    .transform_matrix_for_class(&rows, class_label)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        if per_class.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let n_rows = per_class[0].len();
+        let n_features = per_class[0].first().map_or(0, Vec::len);
+        let mut flattened = Vec::with_capacity(n_rows);
+        for row_idx in 0..n_rows {
+            let mut out_row = Vec::with_capacity(class_labels.len() * n_features);
+            for class_matrix in &per_class {
+                out_row.extend(class_matrix[row_idx].iter().copied());
+            }
+            flattened.push(out_row);
+        }
+        Ok(flattened)
+    }
+
     #[pyo3(signature = (rows, alpha=0.05))]
     fn predict_ci_matrix_multiclass(
         &self,
@@ -283,6 +314,25 @@ impl FastWoe {
             .class_labels()
             .map(|labels| labels.to_vec())
             .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn get_feature_names_multiclass(&self) -> PyResult<Vec<String>> {
+        let class_labels = self
+            .multiclass_model
+            .class_labels()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let feature_names = self
+            .multiclass_model
+            .feature_names()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(class_labels.len() * feature_names.len());
+        for class_label in class_labels {
+            for feature_name in feature_names {
+                out.push(format!("{feature_name}_class_{class_label}"));
+            }
+        }
+        Ok(out)
     }
 
     fn get_feature_mapping_multiclass(
