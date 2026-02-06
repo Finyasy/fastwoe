@@ -120,3 +120,10 @@ X_woe_df = model.transform_matrix(X, as_frame=True)
 ci_df = model.predict_ci_matrix(X, as_frame=True)
 proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
 ```
+
+## Performance Guidance
+- Build extension wheels in optimized mode:
+  `python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml`
+- Run core performance benchmarks:
+  `cargo bench -p fastwoe-core --bench woe_simulation`
+- Release profile is tuned for runtime speed (`lto=fat`, `codegen-units=1`, stripped symbols).
