@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use thiserror::Error;
 
@@ -59,7 +59,7 @@ pub fn compute_binary_woe(
         return Err(WoeError::NonBinaryTarget);
     }
 
-    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
     let mut total_events = 0usize;
     let mut total_non_events = 0usize;
 
@@ -91,6 +91,7 @@ pub fn compute_binary_woe(
             woe,
         });
     }
+    out.sort_by(|a, b| a.category.cmp(&b.category));
 
     Ok(out)
 }
@@ -100,7 +101,7 @@ pub struct BinaryWoeModel {
     smoothing: f64,
     default_woe: f64,
     base_log_odds: Option<f64>,
-    mapping: BTreeMap<String, f64>,
+    mapping: HashMap<String, f64>,
     stats: Vec<CategoryStats>,
 }
 
@@ -110,7 +111,7 @@ impl BinaryWoeModel {
             smoothing,
             default_woe,
             base_log_odds: None,
-            mapping: BTreeMap::new(),
+            mapping: HashMap::new(),
             stats: Vec::new(),
         }
     }
@@ -124,7 +125,7 @@ impl BinaryWoeModel {
         self.mapping = stats
             .iter()
             .map(|row| (row.category.clone(), row.woe))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<HashMap<_, _>>();
         self.stats = stats;
         Ok(())
     }
@@ -172,8 +173,9 @@ pub struct BinaryTabularWoeModel {
     default_woe: f64,
     base_log_odds: Option<f64>,
     feature_names: Vec<String>,
-    feature_mappings: BTreeMap<String, BTreeMap<String, f64>>,
-    feature_stats: BTreeMap<String, Vec<CategoryStats>>,
+    feature_index: HashMap<String, usize>,
+    feature_mappings: Vec<HashMap<String, f64>>,
+    feature_stats: Vec<Vec<CategoryStats>>,
 }
 
 impl BinaryTabularWoeModel {
@@ -183,8 +185,9 @@ impl BinaryTabularWoeModel {
             default_woe,
             base_log_odds: None,
             feature_names: Vec::new(),
-            feature_mappings: BTreeMap::new(),
-            feature_stats: BTreeMap::new(),
+            feature_index: HashMap::new(),
+            feature_mappings: Vec::new(),
+            feature_stats: Vec::new(),
         }
     }
 
@@ -203,10 +206,18 @@ impl BinaryTabularWoeModel {
         let clipped_event_rate = event_rate.clamp(1e-12, 1.0 - 1e-12);
         self.base_log_odds = Some((clipped_event_rate / (1.0 - clipped_event_rate)).ln());
 
+        self.feature_index = self
+            .feature_names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (name.clone(), idx))
+            .collect::<HashMap<_, _>>();
         self.feature_mappings.clear();
         self.feature_stats.clear();
+        self.feature_mappings.reserve(self.feature_names.len());
+        self.feature_stats.reserve(self.feature_names.len());
 
-        for (col_idx, feature_name) in self.feature_names.iter().enumerate() {
+        for col_idx in 0..self.feature_names.len() {
             let categories = rows
                 .iter()
                 .map(|row| row[col_idx].clone())
@@ -215,9 +226,9 @@ impl BinaryTabularWoeModel {
             let mapping = stats
                 .iter()
                 .map(|s| (s.category.clone(), s.woe))
-                .collect::<BTreeMap<_, _>>();
-            self.feature_mappings.insert(feature_name.clone(), mapping);
-            self.feature_stats.insert(feature_name.clone(), stats);
+                .collect::<HashMap<_, _>>();
+            self.feature_mappings.push(mapping);
+            self.feature_stats.push(stats);
         }
 
         Ok(())
@@ -232,13 +243,12 @@ impl BinaryTabularWoeModel {
         Ok(rows
             .iter()
             .map(|row| {
-                self.feature_names
+                self.feature_mappings
                     .iter()
                     .enumerate()
-                    .map(|(col_idx, feature_name)| {
-                        self.feature_mappings
-                            .get(feature_name)
-                            .and_then(|map| map.get(&row[col_idx]))
+                    .map(|(col_idx, mapping)| {
+                        mapping
+                            .get(&row[col_idx])
                             .copied()
                             .unwrap_or(self.default_woe)
                     })
@@ -297,8 +307,13 @@ impl BinaryTabularWoeModel {
         if self.base_log_odds.is_none() {
             return Err(WoeError::NotFitted);
         }
-        self.feature_stats
+        let idx = self
+            .feature_index
             .get(feature_name)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownFeature(feature_name.to_string()))?;
+        self.feature_stats
+            .get(idx)
             .map(|v| v.as_slice())
             .ok_or_else(|| WoeError::UnknownFeature(feature_name.to_string()))
     }
@@ -307,14 +322,16 @@ impl BinaryTabularWoeModel {
 #[derive(Debug, Clone)]
 pub struct MulticlassTabularWoeModel {
     class_labels: Vec<String>,
-    models: BTreeMap<String, BinaryTabularWoeModel>,
+    class_index: HashMap<String, usize>,
+    models: Vec<BinaryTabularWoeModel>,
 }
 
 impl MulticlassTabularWoeModel {
     pub fn new() -> Self {
         Self {
             class_labels: Vec::new(),
-            models: BTreeMap::new(),
+            class_index: HashMap::new(),
+            models: Vec::new(),
         }
     }
 
@@ -333,7 +350,14 @@ impl MulticlassTabularWoeModel {
         let unique_classes = unique_strings(class_labels);
 
         self.class_labels = unique_classes.clone();
+        self.class_index = self
+            .class_labels
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (c.clone(), idx))
+            .collect::<HashMap<_, _>>();
         self.models.clear();
+        self.models.reserve(self.class_labels.len());
 
         for class_label in unique_classes {
             let binary_targets = class_labels
@@ -342,7 +366,7 @@ impl MulticlassTabularWoeModel {
                 .collect::<Vec<u8>>();
             let mut model = BinaryTabularWoeModel::new(smoothing, default_woe);
             model.fit_matrix(rows, &binary_targets, feature_names)?;
-            self.models.insert(class_label, model);
+            self.models.push(model);
         }
         Ok(())
     }
@@ -353,10 +377,10 @@ impl MulticlassTabularWoeModel {
         }
 
         let mut class_scores = Vec::with_capacity(self.class_labels.len());
-        for class_label in &self.class_labels {
+        for (class_idx, class_label) in self.class_labels.iter().enumerate() {
             let model = self
                 .models
-                .get(class_label)
+                .get(class_idx)
                 .ok_or_else(|| WoeError::UnknownClassLabel(class_label.clone()))?;
             let base = model.base_log_odds.ok_or(WoeError::NotFitted)?;
             let scores = model.decision_scores_matrix(rows)?;
@@ -382,9 +406,9 @@ impl MulticlassTabularWoeModel {
         class_label: &str,
     ) -> Result<Vec<f64>, WoeError> {
         let class_idx = self
-            .class_labels
-            .iter()
-            .position(|c| c == class_label)
+            .class_index
+            .get(class_label)
+            .copied()
             .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         let all_probs = self.predict_proba_matrix(rows)?;
         Ok(all_probs.into_iter().map(|row| row[class_idx]).collect())
@@ -398,9 +422,14 @@ impl MulticlassTabularWoeModel {
         if self.class_labels.is_empty() {
             return Err(WoeError::MulticlassNotFitted);
         }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         let model = self
             .models
-            .get(class_label)
+            .get(class_idx)
             .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         model.transform_matrix(rows)
     }
@@ -409,14 +438,7 @@ impl MulticlassTabularWoeModel {
         if self.class_labels.is_empty() {
             return Err(WoeError::MulticlassNotFitted);
         }
-        let first_class = self
-            .class_labels
-            .first()
-            .ok_or(WoeError::MulticlassNotFitted)?;
-        let model = self
-            .models
-            .get(first_class)
-            .ok_or_else(|| WoeError::UnknownClassLabel(first_class.clone()))?;
+        let model = self.models.first().ok_or(WoeError::MulticlassNotFitted)?;
         model.feature_names()
     }
 
@@ -457,9 +479,14 @@ impl MulticlassTabularWoeModel {
         if self.class_labels.is_empty() {
             return Err(WoeError::MulticlassNotFitted);
         }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         let model = self
             .models
-            .get(class_label)
+            .get(class_idx)
             .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         model.feature_mapping(feature_name)
     }
