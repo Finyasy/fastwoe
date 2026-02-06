@@ -105,6 +105,28 @@ ci_multi = model.predict_ci_matrix_multiclass(rows, alpha=0.05)
 ci_c0 = model.predict_ci_matrix_class(rows, "c0", alpha=0.05)
 ```
 
+## IV Analysis (Credit-Scoring Focus)
+```python
+from fastwoe import FastWoe
+
+rows = [["A", "x"], ["A", "y"], ["B", "x"], ["C", "z"]]
+target = [1, 0, 0, 1]
+
+model = FastWoe()
+model.fit_matrix(rows, target, feature_names=["cat", "bucket"])
+
+# Per-feature Information Value with standard error + CI
+iv_rows = model.get_iv_analysis(alpha=0.05)
+iv_cat_only = model.get_iv_analysis(feature_name="cat", alpha=0.05)
+
+# DataFrame output for reporting pipelines
+iv_df = model.get_iv_analysis(as_frame=True)
+
+# Multiclass one-vs-rest IV analysis for a specific class label
+model.fit_matrix_multiclass(rows, ["c0", "c1", "c2", "c0"], feature_names=["cat", "bucket"])
+iv_c0 = model.get_iv_analysis_multiclass("c0", alpha=0.05)
+```
+
 ## Pandas Output Mode
 ```python
 import pandas as pd
