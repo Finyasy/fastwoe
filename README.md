@@ -78,6 +78,8 @@ model.fit_matrix_multiclass(rows, labels, feature_names=["cat", "bucket"])
 all_probs = model.predict_proba_matrix_multiclass(rows)  # shape: (n_rows, n_classes)
 c1_probs = model.predict_proba_matrix_class(rows, "c1")
 classes = model.get_class_labels()
+X_woe_multi = model.transform_matrix_multiclass(rows)
+woe_feature_names = model.get_feature_names_multiclass()
 
 # Feature mapping for a specific class (one-vs-rest)
 cat_mapping_for_c0 = model.get_feature_mapping_multiclass("c0", "cat")
@@ -101,4 +103,20 @@ ci_matrix = model.predict_ci_matrix(rows, alpha=0.05)
 model.fit_matrix_multiclass(rows, ["c0", "c1"], feature_names=["cat", "bucket"])
 ci_multi = model.predict_ci_matrix_multiclass(rows, alpha=0.05)
 ci_c0 = model.predict_ci_matrix_class(rows, "c0", alpha=0.05)
+```
+
+## Pandas Output Mode
+```python
+import pandas as pd
+from fastwoe import FastWoe
+
+X = pd.DataFrame({"cat": ["A", "B"], "bucket": ["x", "y"]})
+y = [1, 0]
+
+model = FastWoe()
+model.fit_matrix(X, y, feature_names=X.columns)
+
+X_woe_df = model.transform_matrix(X, as_frame=True)
+ci_df = model.predict_ci_matrix(X, as_frame=True)
+proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
 ```
