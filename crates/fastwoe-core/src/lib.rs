@@ -24,6 +24,8 @@ pub enum WoeError {
     MulticlassNotFitted,
     #[error("unknown class label: {0}")]
     UnknownClassLabel(String),
+    #[error("alpha must be between 0 and 1 (exclusive)")]
+    InvalidAlpha,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +34,13 @@ pub struct CategoryStats {
     pub event_count: usize,
     pub non_event_count: usize,
     pub woe: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PredictionCi {
+    pub prediction: f64,
+    pub lower_ci: f64,
+    pub upper_ci: f64,
 }
 
 /// Compute WOE per category for a single categorical feature.
@@ -257,6 +266,15 @@ impl BinaryTabularWoeModel {
             .collect())
     }
 
+    pub fn predict_ci_matrix(
+        &self,
+        rows: &[Vec<String>],
+        alpha: f64,
+    ) -> Result<Vec<PredictionCi>, WoeError> {
+        let probs = self.predict_proba_matrix(rows)?;
+        compute_prediction_ci(&probs, alpha)
+    }
+
     pub fn decision_scores_matrix(&self, rows: &[Vec<String>]) -> Result<Vec<f64>, WoeError> {
         if self.base_log_odds.is_none() {
             return Err(WoeError::NotFitted);
@@ -372,6 +390,28 @@ impl MulticlassTabularWoeModel {
         Ok(all_probs.into_iter().map(|row| row[class_idx]).collect())
     }
 
+    pub fn predict_ci_matrix(
+        &self,
+        rows: &[Vec<String>],
+        alpha: f64,
+    ) -> Result<Vec<Vec<PredictionCi>>, WoeError> {
+        let probs = self.predict_proba_matrix(rows)?;
+        probs
+            .iter()
+            .map(|row| compute_prediction_ci(row, alpha))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    pub fn predict_ci_class(
+        &self,
+        rows: &[Vec<String>],
+        class_label: &str,
+        alpha: f64,
+    ) -> Result<Vec<PredictionCi>, WoeError> {
+        let probs = self.predict_proba_class(rows, class_label)?;
+        compute_prediction_ci(&probs, alpha)
+    }
+
     pub fn class_labels(&self) -> Result<&[String], WoeError> {
         if self.class_labels.is_empty() {
             return Err(WoeError::MulticlassNotFitted);
@@ -445,6 +485,27 @@ fn unique_strings(values: &[String]) -> Vec<String> {
     out
 }
 
+fn compute_prediction_ci(probs: &[f64], alpha: f64) -> Result<Vec<PredictionCi>, WoeError> {
+    if !(0.0..1.0).contains(&alpha) {
+        return Err(WoeError::InvalidAlpha);
+    }
+    let z = normal_ppf(1.0 - alpha / 2.0);
+    Ok(probs
+        .iter()
+        .map(|&p| {
+            let var = (p * (1.0 - p)).max(0.0);
+            let se = var.sqrt();
+            let lower = (p - z * se).clamp(0.0, 1.0);
+            let upper = (p + z * se).clamp(0.0, 1.0);
+            PredictionCi {
+                prediction: p,
+                lower_ci: lower,
+                upper_ci: upper,
+            }
+        })
+        .collect())
+}
+
 fn sigmoid(x: f64) -> f64 {
     if x >= 0.0 {
         let z = (-x).exp();
@@ -463,6 +524,55 @@ fn softmax(logits: &[f64]) -> Vec<f64> {
         .collect::<Vec<f64>>();
     let sum = exps.iter().sum::<f64>();
     exps.into_iter().map(|e| e / sum).collect()
+}
+
+fn normal_ppf(p: f64) -> f64 {
+    const A: [f64; 6] = [
+        -39.696_830_286_653_76,
+        220.946_098_424_520_5,
+        -275.928_510_446_968_7,
+        138.357_751_867_269,
+        -30.664_798_066_147_16,
+        2.506_628_277_459_239,
+    ];
+    const B: [f64; 5] = [
+        -54.476_098_798_224_06,
+        161.585_836_858_040_9,
+        -155.698_979_859_886_6,
+        66.801_311_887_719_72,
+        -13.280_681_552_885_72,
+    ];
+    const C: [f64; 6] = [
+        -0.007_784_894_002_430_293,
+        -0.322_396_458_041_136_5,
+        -2.400_758_277_161_838,
+        -2.549_732_539_343_734,
+        4.374_664_141_464_968,
+        2.938_163_982_698_783,
+    ];
+    const D: [f64; 4] = [
+        0.007_784_695_709_041_462,
+        0.322_467_129_070_039_8,
+        2.445_134_137_142_996,
+        3.754_408_661_907_416,
+    ];
+
+    let plow = 0.024_25;
+    let phigh = 1.0 - plow;
+    if p < plow {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= phigh {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -570,5 +680,50 @@ mod tests {
             .predict_proba_class(&rows, "class_0")
             .expect("class prediction should work");
         assert_eq!(class_0.len(), rows.len());
+    }
+
+    #[test]
+    fn binary_predict_ci_works() {
+        let rows = vec![
+            vec!["A".to_string()],
+            vec!["B".to_string()],
+            vec!["A".to_string()],
+        ];
+        let y = vec![1, 0, 1];
+        let mut model = BinaryTabularWoeModel::new(0.5, 0.0);
+        model
+            .fit_matrix(&rows, &y, None)
+            .expect("fit should work for ci test");
+        let ci = model
+            .predict_ci_matrix(&rows, 0.05)
+            .expect("ci should compute");
+        assert_eq!(ci.len(), rows.len());
+        assert!(ci
+            .iter()
+            .all(|r| r.lower_ci <= r.prediction && r.prediction <= r.upper_ci));
+    }
+
+    #[test]
+    fn multiclass_predict_ci_class_works() {
+        let rows = vec![
+            vec!["A".to_string()],
+            vec!["B".to_string()],
+            vec!["C".to_string()],
+            vec!["A".to_string()],
+        ];
+        let y = vec![
+            "class_0".to_string(),
+            "class_1".to_string(),
+            "class_2".to_string(),
+            "class_0".to_string(),
+        ];
+        let mut model = MulticlassTabularWoeModel::new();
+        model
+            .fit_matrix(&rows, &y, None, 0.5, 0.0)
+            .expect("fit should work");
+        let ci = model
+            .predict_ci_class(&rows, "class_0", 0.05)
+            .expect("ci class should work");
+        assert_eq!(ci.len(), rows.len());
     }
 }
