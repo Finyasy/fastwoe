@@ -127,3 +127,9 @@ proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
 - Run core performance benchmarks:
   `cargo bench -p fastwoe-core --bench woe_simulation`
 - Release profile is tuned for runtime speed (`lto=fat`, `codegen-units=1`, stripped symbols).
+
+## CI and Release
+- CI workflow: `.github/workflows/ci.yml`
+- Wheels workflow: `.github/workflows/wheels.yml`
+- Benchmark workflow: `.github/workflows/benchmarks.yml`
+- Release checklist: `docs/release/RELEASE_CHECKLIST.md`
