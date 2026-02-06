@@ -45,6 +45,7 @@ def build_fixture() -> dict:
             "transform_matrix": binary_model.transform_matrix(binary_rows),
             "predict_proba_matrix": binary_model.predict_proba_matrix(binary_rows),
             "predict_ci_matrix_alpha_0_05": binary_model.predict_ci_matrix(binary_rows, alpha=0.05),
+            "iv_analysis_alpha_0_05": _iv_rows_to_dict(binary_model.get_iv_analysis(alpha=0.05)),
         },
         "multiclass": {
             "rows": multiclass_rows,
@@ -69,8 +70,25 @@ def build_fixture() -> dict:
                 "c0",
                 alpha=0.05,
             ),
+            "iv_analysis_class_c0_alpha_0_05": _iv_rows_to_dict(
+                multiclass_model.get_iv_analysis_multiclass("c0", alpha=0.05)
+            ),
         },
     }
+
+
+def _iv_rows_to_dict(rows: list[object]) -> list[dict]:
+    return [
+        {
+            "feature": row.feature,
+            "iv": row.iv,
+            "iv_se": row.iv_se,
+            "iv_ci_lower": row.iv_ci_lower,
+            "iv_ci_upper": row.iv_ci_upper,
+            "iv_significance": row.iv_significance,
+        }
+        for row in rows
+    ]
 
 
 def main() -> None:
