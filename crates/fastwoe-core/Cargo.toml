@@ -1,0 +1,13 @@
+[package]
+name = "fastwoe-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core Rust algorithms for FastWOE."
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+

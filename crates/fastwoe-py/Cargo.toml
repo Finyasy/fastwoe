@@ -1,0 +1,18 @@
+[package]
+name = "fastwoe-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "PyO3 bindings for fastwoe-core."
+
+[lib]
+name = "fastwoe_rs"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[dependencies]
+pyo3.workspace = true
+fastwoe-core = { path = "../fastwoe-core" }
