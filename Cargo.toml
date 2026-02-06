@@ -16,3 +16,13 @@ repository = "https://github.com/xRiskLab/fastwoe"
 thiserror = "2.0.18"
 pyo3 = { version = "0.28.0", features = ["abi3-py39"] }
 serde = { version = "1.0.228", features = ["derive"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.bench]
+inherits = "release"
+debug = true
