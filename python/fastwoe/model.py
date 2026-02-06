@@ -75,6 +75,17 @@ class FastWoe:
     def get_feature_mapping(self, feature_name: str) -> list[Any]:
         return self._inner.get_feature_mapping(str(feature_name))
 
+    def get_iv_analysis(
+        self, feature_name: Any = None, alpha: float = 0.05, as_frame: bool = False
+    ) -> Any:
+        rows = self._inner.get_iv_analysis(
+            None if feature_name is None else str(feature_name),
+            alpha,
+        )
+        if as_frame:
+            return _iv_rows_to_frame(rows)
+        return rows
+
     def fit_multiclass(self, categories: Any, class_labels: Any) -> None:
         self._inner.fit_multiclass(_to_1d_str(categories), _to_1d_str(class_labels))
 
@@ -143,6 +154,22 @@ class FastWoe:
 
     def get_feature_mapping_multiclass(self, class_label: Any, feature_name: Any) -> list[Any]:
         return self._inner.get_feature_mapping_multiclass(str(class_label), str(feature_name))
+
+    def get_iv_analysis_multiclass(
+        self,
+        class_label: Any,
+        feature_name: Any = None,
+        alpha: float = 0.05,
+        as_frame: bool = False,
+    ) -> Any:
+        rows = self._inner.get_iv_analysis_multiclass(
+            str(class_label),
+            None if feature_name is None else str(feature_name),
+            alpha,
+        )
+        if as_frame:
+            return _iv_rows_to_frame(rows)
+        return rows
 
 
 def _to_feature_names(value: Any) -> list[str] | None:
@@ -239,3 +266,22 @@ def _try_import_pandas() -> Any:
     except ImportError:
         return None
     return pd
+
+
+def _iv_rows_to_frame(rows: list[Any]) -> Any:
+    pd = _try_import_pandas()
+    if pd is None:
+        raise RuntimeError("pandas is required for as_frame=True outputs.")
+    return pd.DataFrame(
+        [
+            {
+                "feature": row.feature,
+                "iv": row.iv,
+                "iv_se": row.iv_se,
+                "iv_ci_lower": row.iv_ci_lower,
+                "iv_ci_upper": row.iv_ci_upper,
+                "iv_significance": row.iv_significance,
+            }
+            for row in rows
+        ]
+    )
