@@ -26,6 +26,8 @@ pub enum WoeError {
     UnknownClassLabel(String),
     #[error("alpha must be between 0 and 1 (exclusive)")]
     InvalidAlpha,
+    #[error("smoothing must be strictly positive")]
+    InvalidSmoothing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +36,17 @@ pub struct CategoryStats {
     pub event_count: usize,
     pub non_event_count: usize,
     pub woe: f64,
+    pub woe_se: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IvFeatureStats {
+    pub feature: String,
+    pub iv: f64,
+    pub iv_se: f64,
+    pub iv_ci_lower: f64,
+    pub iv_ci_upper: f64,
+    pub iv_significance: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +62,9 @@ pub fn compute_binary_woe(
     targets: &[u8],
     smoothing: f64,
 ) -> Result<Vec<CategoryStats>, WoeError> {
+    if smoothing <= 0.0 {
+        return Err(WoeError::InvalidSmoothing);
+    }
     if categories.is_empty() || targets.is_empty() {
         return Err(WoeError::EmptyInput);
     }
@@ -83,12 +99,16 @@ pub fn compute_binary_woe(
         let p_event = (event_count as f64 + smoothing) / denom_events;
         let p_non_event = (non_event_count as f64 + smoothing) / denom_non_events;
         let woe = (p_event / p_non_event).ln();
+        let woe_se = (1.0 / (event_count as f64 + smoothing)
+            + 1.0 / (non_event_count as f64 + smoothing))
+            .sqrt();
 
         out.push(CategoryStats {
             category,
             event_count,
             non_event_count,
             woe,
+            woe_se,
         });
     }
     out.sort_by(|a, b| a.category.cmp(&b.category));
@@ -172,10 +192,16 @@ pub struct BinaryTabularWoeModel {
     smoothing: f64,
     default_woe: f64,
     base_log_odds: Option<f64>,
+    n_samples: usize,
+    total_events: usize,
+    total_non_events: usize,
     feature_names: Vec<String>,
     feature_index: HashMap<String, usize>,
     feature_mappings: Vec<HashMap<String, f64>>,
+    feature_woe_se_mappings: Vec<HashMap<String, f64>>,
+    fallback_woe_se: Vec<f64>,
     feature_stats: Vec<Vec<CategoryStats>>,
+    feature_iv_stats: Vec<IvFeatureStats>,
 }
 
 impl BinaryTabularWoeModel {
@@ -184,10 +210,16 @@ impl BinaryTabularWoeModel {
             smoothing,
             default_woe,
             base_log_odds: None,
+            n_samples: 0,
+            total_events: 0,
+            total_non_events: 0,
             feature_names: Vec::new(),
             feature_index: HashMap::new(),
             feature_mappings: Vec::new(),
+            feature_woe_se_mappings: Vec::new(),
+            fallback_woe_se: Vec::new(),
             feature_stats: Vec::new(),
+            feature_iv_stats: Vec::new(),
         }
     }
 
@@ -197,6 +229,9 @@ impl BinaryTabularWoeModel {
         targets: &[u8],
         feature_names: Option<&[String]>,
     ) -> Result<(), WoeError> {
+        if self.smoothing <= 0.0 {
+            return Err(WoeError::InvalidSmoothing);
+        }
         validate_binary_targets(targets)?;
         let ncols = validate_matrix(rows, Some(targets.len()))?;
         self.feature_names = resolve_feature_names(feature_names, ncols)?;
@@ -205,6 +240,9 @@ impl BinaryTabularWoeModel {
         let event_rate = targets.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
         let clipped_event_rate = event_rate.clamp(1e-12, 1.0 - 1e-12);
         self.base_log_odds = Some((clipped_event_rate / (1.0 - clipped_event_rate)).ln());
+        self.n_samples = targets.len();
+        self.total_events = targets.iter().filter(|&&v| v == 1).count();
+        self.total_non_events = self.n_samples.saturating_sub(self.total_events);
 
         self.feature_index = self
             .feature_names
@@ -213,9 +251,16 @@ impl BinaryTabularWoeModel {
             .map(|(idx, name)| (name.clone(), idx))
             .collect::<HashMap<_, _>>();
         self.feature_mappings.clear();
+        self.feature_woe_se_mappings.clear();
+        self.fallback_woe_se.clear();
         self.feature_stats.clear();
+        self.feature_iv_stats.clear();
         self.feature_mappings.reserve(self.feature_names.len());
+        self.feature_woe_se_mappings
+            .reserve(self.feature_names.len());
+        self.fallback_woe_se.reserve(self.feature_names.len());
         self.feature_stats.reserve(self.feature_names.len());
+        self.feature_iv_stats.reserve(self.feature_names.len());
 
         for col_idx in 0..self.feature_names.len() {
             let categories = rows
@@ -223,12 +268,30 @@ impl BinaryTabularWoeModel {
                 .map(|row| row[col_idx].clone())
                 .collect::<Vec<String>>();
             let stats = compute_binary_woe(&categories, targets, self.smoothing)?;
-            let mapping = stats
+            let woe_mapping = stats
                 .iter()
                 .map(|s| (s.category.clone(), s.woe))
                 .collect::<HashMap<_, _>>();
-            self.feature_mappings.push(mapping);
+            let woe_se_mapping = stats
+                .iter()
+                .map(|s| (s.category.clone(), s.woe_se))
+                .collect::<HashMap<_, _>>();
+            let fallback_se = stats.iter().map(|s| s.woe_se).fold(0.0_f64, f64::max);
+            let feature_name = self.feature_names[col_idx].clone();
+            let iv_stats = compute_feature_iv_stats(
+                &feature_name,
+                &stats,
+                self.total_events,
+                self.total_non_events,
+                self.smoothing,
+                0.05,
+            );
+
+            self.feature_mappings.push(woe_mapping);
+            self.feature_woe_se_mappings.push(woe_se_mapping);
+            self.fallback_woe_se.push(fallback_se);
             self.feature_stats.push(stats);
+            self.feature_iv_stats.push(iv_stats);
         }
 
         Ok(())
@@ -281,18 +344,59 @@ impl BinaryTabularWoeModel {
         rows: &[Vec<String>],
         alpha: f64,
     ) -> Result<Vec<PredictionCi>, WoeError> {
-        let probs = self.predict_proba_matrix(rows)?;
-        compute_prediction_ci(&probs, alpha)
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        let base = self.base_log_odds.ok_or(WoeError::NotFitted)?;
+        let z = normal_ppf(1.0 - alpha / 2.0);
+        let decisions = self.decision_with_se_matrix(rows)?;
+        Ok(decisions
+            .into_iter()
+            .map(|(score, se)| {
+                let center = base + score;
+                let lower = sigmoid(center - z * se);
+                let upper = sigmoid(center + z * se);
+                PredictionCi {
+                    prediction: sigmoid(center),
+                    lower_ci: lower.min(upper),
+                    upper_ci: lower.max(upper),
+                }
+            })
+            .collect())
     }
 
     pub fn decision_scores_matrix(&self, rows: &[Vec<String>]) -> Result<Vec<f64>, WoeError> {
+        Ok(self
+            .decision_with_se_matrix(rows)?
+            .into_iter()
+            .map(|(score, _)| score)
+            .collect())
+    }
+
+    fn decision_with_se_matrix(&self, rows: &[Vec<String>]) -> Result<Vec<(f64, f64)>, WoeError> {
         if self.base_log_odds.is_none() {
             return Err(WoeError::NotFitted);
         }
-        let transformed = self.transform_matrix(rows)?;
-        Ok(transformed
-            .into_iter()
-            .map(|row| row.iter().sum::<f64>())
+        validate_matrix(rows, None)?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let mut score = 0.0_f64;
+                let mut se2 = 0.0_f64;
+                for (col_idx, value) in row.iter().enumerate() {
+                    let woe = self.feature_mappings[col_idx]
+                        .get(value)
+                        .copied()
+                        .unwrap_or(self.default_woe);
+                    let woe_se = self.feature_woe_se_mappings[col_idx]
+                        .get(value)
+                        .copied()
+                        .unwrap_or(self.fallback_woe_se[col_idx]);
+                    score += woe;
+                    se2 += woe_se * woe_se;
+                }
+                (score, se2.sqrt())
+            })
             .collect())
     }
 
@@ -316,6 +420,57 @@ impl BinaryTabularWoeModel {
             .get(idx)
             .map(|v| v.as_slice())
             .ok_or_else(|| WoeError::UnknownFeature(feature_name.to_string()))
+    }
+
+    pub fn iv_analysis(&self) -> Result<&[IvFeatureStats], WoeError> {
+        if self.base_log_odds.is_none() {
+            return Err(WoeError::NotFitted);
+        }
+        Ok(&self.feature_iv_stats)
+    }
+
+    pub fn iv_analysis_feature(&self, feature_name: &str) -> Result<IvFeatureStats, WoeError> {
+        if self.base_log_odds.is_none() {
+            return Err(WoeError::NotFitted);
+        }
+        let idx = self
+            .feature_index
+            .get(feature_name)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownFeature(feature_name.to_string()))?;
+        self.feature_iv_stats
+            .get(idx)
+            .cloned()
+            .ok_or_else(|| WoeError::UnknownFeature(feature_name.to_string()))
+    }
+
+    pub fn iv_analysis_with_alpha(&self, alpha: f64) -> Result<Vec<IvFeatureStats>, WoeError> {
+        if self.base_log_odds.is_none() {
+            return Err(WoeError::NotFitted);
+        }
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        Ok(self
+            .feature_iv_stats
+            .iter()
+            .map(|s| with_alpha_iv_stats(s, alpha))
+            .collect())
+    }
+
+    pub fn iv_analysis_feature_with_alpha(
+        &self,
+        feature_name: &str,
+        alpha: f64,
+    ) -> Result<IvFeatureStats, WoeError> {
+        if self.base_log_odds.is_none() {
+            return Err(WoeError::NotFitted);
+        }
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        let raw = self.iv_analysis_feature(feature_name)?;
+        Ok(with_alpha_iv_stats(&raw, alpha))
     }
 }
 
@@ -447,11 +602,28 @@ impl MulticlassTabularWoeModel {
         rows: &[Vec<String>],
         alpha: f64,
     ) -> Result<Vec<Vec<PredictionCi>>, WoeError> {
-        let probs = self.predict_proba_matrix(rows)?;
-        probs
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let per_class = self
+            .models
             .iter()
-            .map(|row| compute_prediction_ci(row, alpha))
-            .collect::<Result<Vec<_>, _>>()
+            .map(|model| model.predict_ci_matrix(rows, alpha))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if per_class.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n_rows = per_class[0].len();
+        let mut out = Vec::with_capacity(n_rows);
+        for row_idx in 0..n_rows {
+            let mut row = Vec::with_capacity(per_class.len());
+            for class_ci in &per_class {
+                row.push(class_ci[row_idx]);
+            }
+            out.push(row);
+        }
+        Ok(out)
     }
 
     pub fn predict_ci_class(
@@ -460,8 +632,19 @@ impl MulticlassTabularWoeModel {
         class_label: &str,
         alpha: f64,
     ) -> Result<Vec<PredictionCi>, WoeError> {
-        let probs = self.predict_proba_class(rows, class_label)?;
-        compute_prediction_ci(&probs, alpha)
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        let model = self
+            .models
+            .get(class_idx)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        model.predict_ci_matrix(rows, alpha)
     }
 
     pub fn class_labels(&self) -> Result<&[String], WoeError> {
@@ -489,6 +672,89 @@ impl MulticlassTabularWoeModel {
             .get(class_idx)
             .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
         model.feature_mapping(feature_name)
+    }
+
+    pub fn iv_analysis_class(&self, class_label: &str) -> Result<Vec<IvFeatureStats>, WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        let model = self
+            .models
+            .get(class_idx)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        Ok(model.iv_analysis()?.to_vec())
+    }
+
+    pub fn iv_analysis_class_feature(
+        &self,
+        class_label: &str,
+        feature_name: &str,
+    ) -> Result<IvFeatureStats, WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        let model = self
+            .models
+            .get(class_idx)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        model.iv_analysis_feature(feature_name)
+    }
+
+    pub fn iv_analysis_class_with_alpha(
+        &self,
+        class_label: &str,
+        alpha: f64,
+    ) -> Result<Vec<IvFeatureStats>, WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        let model = self
+            .models
+            .get(class_idx)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        model.iv_analysis_with_alpha(alpha)
+    }
+
+    pub fn iv_analysis_class_feature_with_alpha(
+        &self,
+        class_label: &str,
+        feature_name: &str,
+        alpha: f64,
+    ) -> Result<IvFeatureStats, WoeError> {
+        if self.class_labels.is_empty() {
+            return Err(WoeError::MulticlassNotFitted);
+        }
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        let class_idx = self
+            .class_index
+            .get(class_label)
+            .copied()
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        let model = self
+            .models
+            .get(class_idx)
+            .ok_or_else(|| WoeError::UnknownClassLabel(class_label.to_string()))?;
+        model.iv_analysis_feature_with_alpha(feature_name, alpha)
     }
 }
 
@@ -542,25 +808,74 @@ fn unique_strings(values: &[String]) -> Vec<String> {
     out
 }
 
-fn compute_prediction_ci(probs: &[f64], alpha: f64) -> Result<Vec<PredictionCi>, WoeError> {
-    if !(0.0..1.0).contains(&alpha) {
-        return Err(WoeError::InvalidAlpha);
+fn compute_feature_iv_stats(
+    feature: &str,
+    stats: &[CategoryStats],
+    total_events: usize,
+    total_non_events: usize,
+    smoothing: f64,
+    alpha: f64,
+) -> IvFeatureStats {
+    let k = stats.len() as f64;
+    let n_event = (total_events as f64 + smoothing * k).max(1e-12);
+    let n_non_event = (total_non_events as f64 + smoothing * k).max(1e-12);
+
+    let mut iv = 0.0_f64;
+    let mut iv_var = 0.0_f64;
+    for row in stats {
+        let p_event = (row.event_count as f64 + smoothing) / n_event;
+        let p_non_event = (row.non_event_count as f64 + smoothing) / n_non_event;
+        let woe = row.woe;
+        iv += (p_event - p_non_event) * woe;
+
+        // Delta-method approximation of IV contribution variance.
+        let d_event = woe + 1.0 - p_non_event / p_event;
+        let d_non_event = -woe - p_event / p_non_event + 1.0;
+        let var_event = p_event * (1.0 - p_event) / n_event;
+        let var_non_event = p_non_event * (1.0 - p_non_event) / n_non_event;
+        iv_var += d_event * d_event * var_event + d_non_event * d_non_event * var_non_event;
     }
+
+    let iv_se = iv_var.max(0.0).sqrt();
     let z = normal_ppf(1.0 - alpha / 2.0);
-    Ok(probs
-        .iter()
-        .map(|&p| {
-            let var = (p * (1.0 - p)).max(0.0);
-            let se = var.sqrt();
-            let lower = (p - z * se).clamp(0.0, 1.0);
-            let upper = (p + z * se).clamp(0.0, 1.0);
-            PredictionCi {
-                prediction: p,
-                lower_ci: lower,
-                upper_ci: upper,
-            }
-        })
-        .collect())
+    let iv_ci_lower = (iv - z * iv_se).max(0.0);
+    let iv_ci_upper = (iv + z * iv_se).max(0.0);
+    let iv_significance = if iv_ci_lower > 0.0 {
+        "Significant"
+    } else {
+        "Not Significant"
+    }
+    .to_string();
+
+    IvFeatureStats {
+        feature: feature.to_string(),
+        iv,
+        iv_se,
+        iv_ci_lower,
+        iv_ci_upper,
+        iv_significance,
+    }
+}
+
+fn with_alpha_iv_stats(base: &IvFeatureStats, alpha: f64) -> IvFeatureStats {
+    let z = normal_ppf(1.0 - alpha / 2.0);
+    let iv_ci_lower = (base.iv - z * base.iv_se).max(0.0);
+    let iv_ci_upper = (base.iv + z * base.iv_se).max(0.0);
+    let iv_significance = if iv_ci_lower > 0.0 {
+        "Significant"
+    } else {
+        "Not Significant"
+    }
+    .to_string();
+
+    IvFeatureStats {
+        feature: base.feature.clone(),
+        iv: base.iv,
+        iv_se: base.iv_se,
+        iv_ci_lower,
+        iv_ci_upper,
+        iv_significance,
+    }
 }
 
 fn sigmoid(x: f64) -> f64 {
@@ -806,5 +1121,138 @@ mod tests {
             .expect("class transform should work");
         assert_eq!(transformed.len(), rows.len());
         assert_eq!(transformed[0].len(), feature_names.len());
+    }
+
+    #[test]
+    fn compute_binary_woe_includes_positive_standard_errors() {
+        let cats = vec![
+            "A".to_string(),
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "C".to_string(),
+        ];
+        let y = vec![1, 0, 1, 0, 1];
+        let stats = compute_binary_woe(&cats, &y, 0.5).expect("woe should compute");
+        assert!(stats.iter().all(|r| r.woe_se > 0.0));
+    }
+
+    #[test]
+    fn binary_iv_analysis_has_consistent_bounds_and_significance() {
+        let rows = vec![
+            vec!["A".to_string(), "X".to_string()],
+            vec!["A".to_string(), "Y".to_string()],
+            vec!["B".to_string(), "X".to_string()],
+            vec!["C".to_string(), "Z".to_string()],
+            vec!["C".to_string(), "Y".to_string()],
+        ];
+        let y = vec![1, 0, 0, 1, 1];
+        let feature_names = vec!["cat".to_string(), "bucket".to_string()];
+        let mut model = BinaryTabularWoeModel::new(0.5, 0.0);
+        model
+            .fit_matrix(&rows, &y, Some(&feature_names))
+            .expect("fit should work");
+
+        let iv_rows = model.iv_analysis().expect("iv analysis should work");
+        assert_eq!(iv_rows.len(), feature_names.len());
+        assert!(iv_rows.iter().all(|r| r.iv >= 0.0));
+        assert!(iv_rows
+            .iter()
+            .all(|r| r.iv_ci_lower <= r.iv && r.iv <= r.iv_ci_upper));
+    }
+
+    #[test]
+    fn iv_analysis_alpha_changes_interval_width() {
+        let rows = vec![
+            vec!["A".to_string()],
+            vec!["A".to_string()],
+            vec!["B".to_string()],
+            vec!["C".to_string()],
+            vec!["C".to_string()],
+            vec!["C".to_string()],
+        ];
+        let y = vec![1, 0, 0, 1, 1, 0];
+        let mut model = BinaryTabularWoeModel::new(0.5, 0.0);
+        model
+            .fit_matrix(&rows, &y, Some(&["cat".to_string()]))
+            .expect("fit should work");
+        let iv_95 = model
+            .iv_analysis_feature_with_alpha("cat", 0.05)
+            .expect("iv analysis alpha .05 should work");
+        let iv_99 = model
+            .iv_analysis_feature_with_alpha("cat", 0.01)
+            .expect("iv analysis alpha .01 should work");
+        let w95 = iv_95.iv_ci_upper - iv_95.iv_ci_lower;
+        let w99 = iv_99.iv_ci_upper - iv_99.iv_ci_lower;
+        assert!(w99 > w95);
+    }
+
+    #[test]
+    fn binary_ci_shrinks_with_more_training_data() {
+        let base_rows = vec![
+            vec!["A".to_string()],
+            vec!["A".to_string()],
+            vec!["B".to_string()],
+            vec!["C".to_string()],
+        ];
+        let base_y = vec![1, 0, 0, 1];
+        let predict_rows = vec![vec!["A".to_string()]];
+
+        let mut model_small = BinaryTabularWoeModel::new(0.5, 0.0);
+        model_small
+            .fit_matrix(&base_rows, &base_y, Some(&["cat".to_string()]))
+            .expect("small fit should work");
+        let ci_small = model_small
+            .predict_ci_matrix(&predict_rows, 0.05)
+            .expect("small ci should work")[0];
+        let width_small = ci_small.upper_ci - ci_small.lower_ci;
+
+        let mut large_rows = Vec::new();
+        let mut large_y = Vec::new();
+        for _ in 0..20 {
+            large_rows.extend(base_rows.clone());
+            large_y.extend(base_y.clone());
+        }
+        let mut model_large = BinaryTabularWoeModel::new(0.5, 0.0);
+        model_large
+            .fit_matrix(&large_rows, &large_y, Some(&["cat".to_string()]))
+            .expect("large fit should work");
+        let ci_large = model_large
+            .predict_ci_matrix(&predict_rows, 0.05)
+            .expect("large ci should work")[0];
+        let width_large = ci_large.upper_ci - ci_large.lower_ci;
+
+        assert!(width_large < width_small);
+    }
+
+    #[test]
+    fn multiclass_iv_analysis_class_returns_per_feature_rows() {
+        let rows = vec![
+            vec!["A".to_string(), "X".to_string()],
+            vec!["A".to_string(), "Y".to_string()],
+            vec!["B".to_string(), "X".to_string()],
+            vec!["C".to_string(), "Z".to_string()],
+            vec!["C".to_string(), "Y".to_string()],
+            vec!["B".to_string(), "Z".to_string()],
+        ];
+        let labels = vec![
+            "c0".to_string(),
+            "c1".to_string(),
+            "c2".to_string(),
+            "c0".to_string(),
+            "c1".to_string(),
+            "c2".to_string(),
+        ];
+        let feature_names = vec!["cat".to_string(), "bucket".to_string()];
+        let mut model = MulticlassTabularWoeModel::new();
+        model
+            .fit_matrix(&rows, &labels, Some(&feature_names), 0.5, 0.0)
+            .expect("fit should work");
+
+        let rows_c0 = model
+            .iv_analysis_class("c0")
+            .expect("class iv analysis should work");
+        assert_eq!(rows_c0.len(), feature_names.len());
+        assert!(rows_c0.iter().all(|r| r.iv >= 0.0));
     }
 }
