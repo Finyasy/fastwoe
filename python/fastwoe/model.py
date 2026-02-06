@@ -17,17 +17,26 @@ class FastWoe:
     def fit(self, categories: Any, targets: Any) -> None:
         self._inner.fit(_to_1d_str(categories), _to_u8(targets))
 
-    def transform(self, categories: Any) -> list[float]:
-        return self._inner.transform(_to_1d_str(categories))
+    def transform(self, categories: Any, as_frame: bool = False) -> Any:
+        values = self._inner.transform(_to_1d_str(categories))
+        if as_frame:
+            return _to_frame(values, columns=["woe"], index=_extract_index(categories))
+        return values
 
-    def fit_transform(self, categories: Any, targets: Any) -> list[float]:
-        return self._inner.fit_transform(_to_1d_str(categories), _to_u8(targets))
+    def fit_transform(self, categories: Any, targets: Any, as_frame: bool = False) -> Any:
+        values = self._inner.fit_transform(_to_1d_str(categories), _to_u8(targets))
+        if as_frame:
+            return _to_frame(values, columns=["woe"], index=_extract_index(categories))
+        return values
 
     def predict_proba(self, categories: Any) -> list[float]:
         return self._inner.predict_proba(_to_1d_str(categories))
 
-    def predict_ci(self, categories: Any, alpha: float = 0.05) -> list[tuple[float, float, float]]:
-        return self._inner.predict_ci(_to_1d_str(categories), alpha)
+    def predict_ci(self, categories: Any, alpha: float = 0.05, as_frame: bool = False) -> Any:
+        values = self._inner.predict_ci(_to_1d_str(categories), alpha)
+        if as_frame:
+            return _to_ci_frame(values, index=_extract_index(categories))
+        return values
 
     def get_mapping(self) -> list[Any]:
         return self._inner.get_mapping()
@@ -35,21 +44,30 @@ class FastWoe:
     def fit_matrix(self, rows: Any, targets: Any, feature_names: Any = None) -> None:
         self._inner.fit_matrix(_to_2d_str(rows), _to_u8(targets), _to_feature_names(feature_names))
 
-    def transform_matrix(self, rows: Any) -> list[list[float]]:
-        return self._inner.transform_matrix(_to_2d_str(rows))
+    def transform_matrix(self, rows: Any, as_frame: bool = False) -> Any:
+        values = self._inner.transform_matrix(_to_2d_str(rows))
+        if as_frame:
+            return _to_frame(values, columns=self.get_feature_names(), index=_extract_index(rows))
+        return values
 
     def fit_transform_matrix(
-        self, rows: Any, targets: Any, feature_names: Any = None
-    ) -> list[list[float]]:
-        return self._inner.fit_transform_matrix(
+        self, rows: Any, targets: Any, feature_names: Any = None, as_frame: bool = False
+    ) -> Any:
+        values = self._inner.fit_transform_matrix(
             _to_2d_str(rows), _to_u8(targets), _to_feature_names(feature_names)
         )
+        if as_frame:
+            return _to_frame(values, columns=self.get_feature_names(), index=_extract_index(rows))
+        return values
 
     def predict_proba_matrix(self, rows: Any) -> list[float]:
         return self._inner.predict_proba_matrix(_to_2d_str(rows))
 
-    def predict_ci_matrix(self, rows: Any, alpha: float = 0.05) -> list[tuple[float, float, float]]:
-        return self._inner.predict_ci_matrix(_to_2d_str(rows), alpha)
+    def predict_ci_matrix(self, rows: Any, alpha: float = 0.05, as_frame: bool = False) -> Any:
+        values = self._inner.predict_ci_matrix(_to_2d_str(rows), alpha)
+        if as_frame:
+            return _to_ci_frame(values, index=_extract_index(rows))
+        return values
 
     def get_feature_names(self) -> list[str]:
         return self._inner.get_feature_names()
@@ -60,8 +78,12 @@ class FastWoe:
     def fit_multiclass(self, categories: Any, class_labels: Any) -> None:
         self._inner.fit_multiclass(_to_1d_str(categories), _to_1d_str(class_labels))
 
-    def predict_proba_multiclass(self, categories: Any) -> list[list[float]]:
-        return self._inner.predict_proba_multiclass(_to_1d_str(categories))
+    def predict_proba_multiclass(self, categories: Any, as_frame: bool = False) -> Any:
+        values = self._inner.predict_proba_multiclass(_to_1d_str(categories))
+        if as_frame:
+            cols = [f"proba_{c}" for c in self.get_class_labels()]
+            return _to_frame(values, columns=cols, index=_extract_index(categories))
+        return values
 
     def predict_ci_multiclass(
         self, categories: Any, alpha: float = 0.05
@@ -86,8 +108,19 @@ class FastWoe:
             _to_2d_str(rows), _to_1d_str(class_labels), _to_feature_names(feature_names)
         )
 
-    def predict_proba_matrix_multiclass(self, rows: Any) -> list[list[float]]:
-        return self._inner.predict_proba_matrix_multiclass(_to_2d_str(rows))
+    def predict_proba_matrix_multiclass(self, rows: Any, as_frame: bool = False) -> Any:
+        values = self._inner.predict_proba_matrix_multiclass(_to_2d_str(rows))
+        if as_frame:
+            cols = [f"proba_{c}" for c in self.get_class_labels()]
+            return _to_frame(values, columns=cols, index=_extract_index(rows))
+        return values
+
+    def transform_matrix_multiclass(self, rows: Any, as_frame: bool = False) -> Any:
+        values = self._inner.transform_matrix_multiclass(_to_2d_str(rows))
+        if as_frame:
+            cols = self.get_feature_names_multiclass()
+            return _to_frame(values, columns=cols, index=_extract_index(rows))
+        return values
 
     def predict_ci_matrix_multiclass(
         self, rows: Any, alpha: float = 0.05
@@ -104,6 +137,9 @@ class FastWoe:
 
     def get_class_labels(self) -> list[str]:
         return self._inner.get_class_labels()
+
+    def get_feature_names_multiclass(self) -> list[str]:
+        return self._inner.get_feature_names_multiclass()
 
     def get_feature_mapping_multiclass(self, class_label: Any, feature_name: Any) -> list[Any]:
         return self._inner.get_feature_mapping_multiclass(str(class_label), str(feature_name))
@@ -174,3 +210,32 @@ def _to_2d_str(value: Any) -> list[list[str]]:
 def _is_pandas_frame(value: Any) -> bool:
     return hasattr(value, "values") and hasattr(value, "columns") and hasattr(value, "dtypes")
 
+
+def _extract_index(value: Any) -> Any:
+    if hasattr(value, "index"):
+        return value.index
+    return None
+
+
+def _to_frame(values: Any, columns: list[str], index: Any = None) -> Any:
+    pd = _try_import_pandas()
+    if pd is None:
+        raise RuntimeError("pandas is required for as_frame=True outputs.")
+    if values and not isinstance(values[0], list):
+        values = [[v] for v in values]
+    return pd.DataFrame(values, columns=columns, index=index)
+
+
+def _to_ci_frame(values: list[tuple[float, float, float]], index: Any = None) -> Any:
+    pd = _try_import_pandas()
+    if pd is None:
+        raise RuntimeError("pandas is required for as_frame=True outputs.")
+    return pd.DataFrame(values, columns=["prediction", "lower_ci", "upper_ci"], index=index)
+
+
+def _try_import_pandas() -> Any:
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    return pd
