@@ -38,6 +38,8 @@ proba = model.predict_proba(["A", "B", "Z"])
 mapping = model.get_mapping()
 ```
 
+`FastWoe` accepts Python lists, NumPy arrays, pandas Series, and pandas DataFrames.
+
 ## Multi-Feature API (Categorical Matrix)
 ```python
 from fastwoe import FastWoe
@@ -79,4 +81,24 @@ classes = model.get_class_labels()
 
 # Feature mapping for a specific class (one-vs-rest)
 cat_mapping_for_c0 = model.get_feature_mapping_multiclass("c0", "cat")
+```
+
+## Confidence Intervals
+```python
+from fastwoe import FastWoe
+
+model = FastWoe()
+model.fit(["A", "B", "A"], [1, 0, 1])
+ci = model.predict_ci(["A", "Z"], alpha=0.05)
+# [(prediction, lower_ci, upper_ci), ...]
+
+# Matrix APIs
+rows = [["A", "x"], ["B", "y"]]
+model.fit_matrix(rows, [1, 0], feature_names=["cat", "bucket"])
+ci_matrix = model.predict_ci_matrix(rows, alpha=0.05)
+
+# Multiclass APIs
+model.fit_matrix_multiclass(rows, ["c0", "c1"], feature_names=["cat", "bucket"])
+ci_multi = model.predict_ci_matrix_multiclass(rows, alpha=0.05)
+ci_c0 = model.predict_ci_matrix_class(rows, "c0", alpha=0.05)
 ```
