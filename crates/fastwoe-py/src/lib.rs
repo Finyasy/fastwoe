@@ -15,6 +15,25 @@ pub struct WoeRow {
     pub non_event_count: usize,
     #[pyo3(get)]
     pub woe: f64,
+    #[pyo3(get)]
+    pub woe_se: f64,
+}
+
+#[pyclass]
+#[derive(Debug)]
+pub struct IvRow {
+    #[pyo3(get)]
+    pub feature: String,
+    #[pyo3(get)]
+    pub iv: f64,
+    #[pyo3(get)]
+    pub iv_se: f64,
+    #[pyo3(get)]
+    pub iv_ci_lower: f64,
+    #[pyo3(get)]
+    pub iv_ci_upper: f64,
+    #[pyo3(get)]
+    pub iv_significance: String,
 }
 
 #[pyclass]
@@ -147,6 +166,21 @@ impl FastWoe {
             .feature_mapping(&feature_name)
             .map_err(|e| PyValueError::new_err(e.to_string()))
             .map(to_woe_rows)
+    }
+
+    #[pyo3(signature = (feature_name=None, alpha=0.05))]
+    fn get_iv_analysis(&self, feature_name: Option<String>, alpha: f64) -> PyResult<Vec<IvRow>> {
+        if let Some(name) = feature_name {
+            self.model
+                .iv_analysis_feature_with_alpha(&name, alpha)
+                .map(|row| vec![to_iv_row(row)])
+                .map_err(|e| PyValueError::new_err(e.to_string()))
+        } else {
+            self.model
+                .iv_analysis_with_alpha(alpha)
+                .map(|rows| rows.into_iter().map(to_iv_row).collect())
+                .map_err(|e| PyValueError::new_err(e.to_string()))
+        }
     }
 
     fn fit_multiclass(
@@ -345,6 +379,26 @@ impl FastWoe {
             .map_err(|e| PyValueError::new_err(e.to_string()))
             .map(to_woe_rows)
     }
+
+    #[pyo3(signature = (class_label, feature_name=None, alpha=0.05))]
+    fn get_iv_analysis_multiclass(
+        &self,
+        class_label: String,
+        feature_name: Option<String>,
+        alpha: f64,
+    ) -> PyResult<Vec<IvRow>> {
+        if let Some(name) = feature_name {
+            self.multiclass_model
+                .iv_analysis_class_feature_with_alpha(&class_label, &name, alpha)
+                .map(|row| vec![to_iv_row(row)])
+                .map_err(|e| PyValueError::new_err(e.to_string()))
+        } else {
+            self.multiclass_model
+                .iv_analysis_class_with_alpha(&class_label, alpha)
+                .map(|rows| rows.into_iter().map(to_iv_row).collect())
+                .map_err(|e| PyValueError::new_err(e.to_string()))
+        }
+    }
 }
 
 #[pyfunction]
@@ -363,6 +417,7 @@ fn compute_binary_woe_py(
             event_count: s.event_count,
             non_event_count: s.non_event_count,
             woe: s.woe,
+            woe_se: s.woe_se,
         })
         .collect())
 }
@@ -371,6 +426,7 @@ fn compute_binary_woe_py(
 fn fastwoe_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FastWoe>()?;
     m.add_class::<WoeRow>()?;
+    m.add_class::<IvRow>()?;
     m.add_function(wrap_pyfunction!(compute_binary_woe_py, m)?)?;
     Ok(())
 }
@@ -394,6 +450,7 @@ fn to_woe_rows(stats: &[fastwoe_core::CategoryStats]) -> Vec<WoeRow> {
             event_count: s.event_count,
             non_event_count: s.non_event_count,
             woe: s.woe,
+            woe_se: s.woe_se,
         })
         .collect()
 }
@@ -403,4 +460,15 @@ fn ci_to_tuples(values: Vec<PredictionCi>) -> Vec<(f64, f64, f64)> {
         .into_iter()
         .map(|r| (r.prediction, r.lower_ci, r.upper_ci))
         .collect()
+}
+
+fn to_iv_row(value: fastwoe_core::IvFeatureStats) -> IvRow {
+    IvRow {
+        feature: value.feature,
+        iv: value.iv,
+        iv_se: value.iv_se,
+        iv_ci_lower: value.iv_ci_lower,
+        iv_ci_upper: value.iv_ci_upper,
+        iv_significance: value.iv_significance,
+    }
 }
