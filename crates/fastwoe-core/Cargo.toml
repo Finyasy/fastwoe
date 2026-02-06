@@ -11,3 +11,10 @@ description = "Core Rust algorithms for FastWOE."
 thiserror.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "woe_simulation"
+harness = false
+
