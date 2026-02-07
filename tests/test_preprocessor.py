@@ -118,4 +118,41 @@ def test_preprocessor_numeric_and_categorical_integration() -> None:
 
 def test_preprocessor_rejects_invalid_binning_method() -> None:
     with pytest.raises(ValueError, match="binning_method"):
-        WoePreprocessor(binning_method="tree")
+        WoePreprocessor(binning_method="does_not_exist")
+
+
+def test_preprocessor_tree_binning_requires_target() -> None:
+    rows = [[1.0], [2.0], [3.0]]
+    pre = WoePreprocessor(n_bins=2, binning_method="tree")
+    with pytest.raises(ValueError, match="target is required"):
+        pre.fit(rows, numerical_features=[0])
+
+
+def test_preprocessor_tree_binning_rejects_non_binary_target() -> None:
+    rows = [[1.0], [2.0], [3.0], [4.0]]
+    pre = WoePreprocessor(n_bins=2, binning_method="tree")
+    with pytest.raises(ValueError, match="binary"):
+        pre.fit(rows, numerical_features=[0], target=[0, 2, 1, 1])
+
+
+def test_preprocessor_numeric_tree_binning_uses_target_signal() -> None:
+    rows = [[1.0], [2.0], [3.0], [100.0], [110.0], [120.0]]
+    target = [0, 0, 0, 1, 1, 1]
+    pre = WoePreprocessor(n_bins=2, binning_method="tree")
+    out = pre.fit_transform(rows, numerical_features=[0], target=target)
+
+    first_label = out[0][0]
+    second_label = out[-1][0]
+    assert all(r[0] == first_label for r in out[:3])
+    assert all(r[0] == second_label for r in out[3:])
+    assert first_label != second_label
+
+
+def test_preprocessor_numeric_binning_clamps_out_of_range_values() -> None:
+    rows = [[0.0], [1.0], [2.0], [3.0]]
+    pre = WoePreprocessor(n_bins=2, binning_method="uniform")
+    pre.fit(rows, numerical_features=[0])
+
+    out = pre.transform([[-10.0], [100.0]])
+    assert out[0][0] == "bin_0"
+    assert out[1][0] == "bin_1"

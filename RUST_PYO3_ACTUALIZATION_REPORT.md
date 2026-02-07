@@ -155,3 +155,65 @@ Project is considered actualized when all conditions are met:
 - Select MVP cut for first release (`binary + basic stats` or `binary + multiclass`).
 - Approve benchmark datasets and tolerance thresholds.
 - Begin Phase 0 parity spec document and fixture extraction.
+
+## 12) Implementation Progress Update
+- Parity mode and MVP scope were formalized in `docs/parity/PHASE0_PARITY_SPEC.md`.
+- Benchmark dataset/threshold baseline is documented in `docs/performance/BENCHMARK_DATASETS_AND_THRESHOLDS.md`.
+- Phase 4 advanced-feature progress includes supervised `tree` numerical binning in `WoePreprocessor` for binary targets.
+- Regression coverage was added for out-of-range numeric bin assignment.
+
+## 13) Developer setup (maturin + PyO3 extension)
+
+To build and test the Rust-backed Python extension locally:
+
+### Install maturin
+
+Use the active Python interpreter (recommended: do this inside your conda/venv):
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install maturin
+```
+
+Verify:
+
+```bash
+python -m maturin --version
+```
+
+With conda:
+
+```bash
+conda activate <your-env>
+python -m pip install maturin
+```
+
+### Build and install the PyO3 extension
+
+From the **repository root**:
+
+```bash
+python -m maturin develop --release --manifest-path crates/fastwoe-py/Cargo.toml
+```
+
+This compiles the Rust crate and installs the `fastwoe` package (with `fastwoe_rs` extension) into the current environment.
+
+### Run parity and statistical tests
+
+After the extension is installed:
+
+```bash
+PYTHONPATH=python pytest -q tests/test_phase0_parity_contract.py tests/test_statistical_accuracy.py
+```
+
+For the full test suite:
+
+```bash
+PYTHONPATH=python pytest -q tests/
+```
+
+### Troubleshooting
+
+- **Missing maturin:** Install as above; ensure the same Python you use for `pytest` has maturin and the developed package.
+- **Rust not found:** Install the Rust toolchain (`rustup`) and ensure `cargo` is on your PATH. The project uses `rust-toolchain.toml` (stable).
+- **Parity/stat tests fail:** Ensure you ran `maturin develop --release` (release build). Debug builds are slower and are not the validated configuration.

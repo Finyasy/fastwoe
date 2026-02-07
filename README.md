@@ -155,6 +155,16 @@ pre = WoePreprocessor(n_bins=3, binning_method="quantile")
 rows_binned = pre.fit_transform(rows, numerical_features=[0], cat_features=[1])
 ```
 
+Supervised tree-style numerical binning is available for binary targets:
+```python
+from fastwoe import WoePreprocessor
+
+rows = [[1000.0], [1100.0], [1200.0], [2000.0], [2100.0], [2200.0]]
+y = [0, 0, 0, 1, 1, 1]
+pre = WoePreprocessor(n_bins=2, binning_method="tree")
+rows_binned = pre.fit_transform(rows, numerical_features=[0], target=y)
+```
+
 ## Pandas Output Mode
 ```python
 import pandas as pd

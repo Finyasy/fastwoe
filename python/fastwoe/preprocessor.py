@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib import import_module
+from types import ModuleType
 from typing import Any
 
 
@@ -46,8 +50,8 @@ class WoePreprocessor:
             raise ValueError("min_count must be positive.")
         if n_bins <= 1:
             raise ValueError("n_bins must be greater than 1.")
-        if binning_method not in {"quantile", "uniform"}:
-            raise ValueError("binning_method must be one of: {'quantile', 'uniform'}.")
+        if binning_method not in {"quantile", "uniform", "tree"}:
+            raise ValueError("binning_method must be one of: {'quantile', 'uniform', 'tree'}.")
 
         self.max_categories = max_categories
         self.top_p = top_p
@@ -67,7 +71,11 @@ class WoePreprocessor:
         self._summary_rows: list[dict[str, Any]] = []
 
     def fit(
-        self, X: Any, cat_features: Any = None, numerical_features: Any = None
+        self,
+        X: Any,
+        cat_features: Any = None,
+        numerical_features: Any = None,
+        target: Any = None,
     ) -> WoePreprocessor:
         rows, meta = _coerce_rows(X)
         if not rows:
@@ -87,16 +95,26 @@ class WoePreprocessor:
         self._fit_counts.clear()
         self._summary_rows.clear()
 
+        target_rows = None
+        if self.binning_method == "tree" and self._numeric_idxs:
+            target_rows = _coerce_binary_target(target, expected_len=len(rows))
+
         # Learn numeric bin edges first.
         for idx in self._numeric_idxs:
-            numeric_values = [
-                float(v)
-                for row in rows
-                for v in [row[idx]]
-                if _try_float(v) is not None
-            ]
+            numeric_values: list[float] = []
+            numeric_targets: list[int] = []
+            for row_idx, row in enumerate(rows):
+                parsed = _try_float(row[idx])
+                if parsed is None:
+                    continue
+                numeric_values.append(parsed)
+                if target_rows is not None:
+                    numeric_targets.append(target_rows[row_idx])
             edges = _compute_bin_edges(
-                numeric_values, n_bins=self.n_bins, method=self.binning_method
+                numeric_values,
+                n_bins=self.n_bins,
+                method=self.binning_method,
+                targets=numeric_targets if target_rows is not None else None,
             )
             self._numeric_edges[idx] = edges
             unique_non_missing = len(set(numeric_values))
@@ -154,10 +172,17 @@ class WoePreprocessor:
         return _restore_output(transformed, meta)
 
     def fit_transform(
-        self, X: Any, cat_features: Any = None, numerical_features: Any = None
+        self,
+        X: Any,
+        cat_features: Any = None,
+        numerical_features: Any = None,
+        target: Any = None,
     ) -> Any:
         return self.fit(
-            X, cat_features=cat_features, numerical_features=numerical_features
+            X,
+            cat_features=cat_features,
+            numerical_features=numerical_features,
+            target=target,
         ).transform(X)
 
     def get_reduction_summary(self, as_frame: bool = False) -> Any:
@@ -304,10 +329,56 @@ def _resolve_feature_indices(cat_features: Any, feature_names: list[str]) -> lis
     return list(dict.fromkeys(resolved))
 
 
-def _compute_bin_edges(values: list[float], n_bins: int, method: str) -> list[float]:
+def _coerce_binary_target(target: Any, expected_len: int) -> list[int]:
+    if target is None:
+        raise ValueError(
+            "target is required when binning_method='tree' and numerical_features are provided."
+        )
+
+    if hasattr(target, "tolist"):
+        values = target.tolist()
+    elif isinstance(target, Iterable) and not isinstance(target, (str, bytes)):
+        values = list(target)
+    else:
+        raise TypeError("target must be an iterable of binary labels.")
+
+    if len(values) != expected_len:
+        raise ValueError(f"target length mismatch: expected {expected_len}, got {len(values)}.")
+
+    out: list[int] = []
+    for value in values:
+        if isinstance(value, bool):
+            out.append(int(value))
+            continue
+        if value in {0, 1}:
+            out.append(int(value))
+            continue
+        if isinstance(value, str) and value.strip() in {"0", "1"}:
+            out.append(int(value.strip()))
+            continue
+        raise ValueError("target must be binary with values in {0, 1}.")
+    return out
+
+
+def _compute_bin_edges(
+    values: list[float],
+    n_bins: int,
+    method: str,
+    targets: list[int] | None = None,
+) -> list[float]:
     if not values:
         # Degenerate case; transform will map everything to missing/other.
         return [0.0, 1.0]
+    if method == "tree":
+        if targets is None:
+            raise ValueError(
+                "target is required when binning_method='tree' and numerical_features are provided."
+            )
+        if len(targets) != len(values):
+            raise ValueError(
+                "tree binning requires targets aligned with non-missing numerical rows."
+            )
+        return _compute_tree_bin_edges(values, targets, n_bins=n_bins)
     np = _try_import_numpy()
     if np is None:
         raise RuntimeError("numpy is required for numerical binning.")
@@ -332,16 +403,16 @@ def _compute_bin_edges(values: list[float], n_bins: int, method: str) -> list[fl
 
 
 def _bin_label(value: float, edges: list[float]) -> str:
-    # Find highest edge <= value; right-closed final interval.
-    bin_idx = 0
-    last = len(edges) - 2
-    for i in range(len(edges) - 1):
-        lo = edges[i]
-        hi = edges[i + 1]
-        is_last = i == last
-        if (lo <= value < hi) or (is_last and lo <= value <= hi):
-            bin_idx = i
-            break
+    # Clamp out-of-range values and use binary search for in-range values.
+    if len(edges) < 2:
+        return "bin_0"
+    last_bin = len(edges) - 2
+    if value <= edges[0]:
+        return "bin_0"
+    if value >= edges[-1]:
+        return f"bin_{last_bin}"
+    bin_idx = bisect_right(edges, value) - 1
+    bin_idx = max(0, min(bin_idx, last_bin))
     return f"bin_{bin_idx}"
 
 
@@ -361,17 +432,114 @@ def _try_float(value: Any) -> float | None:
     return out
 
 
-def _try_import_pandas() -> Any:
-    try:
-        import pandas as pd
-    except ImportError:
-        return None
-    return pd
+def _compute_tree_bin_edges(values: list[float], targets: list[int], n_bins: int) -> list[float]:
+    pairs = sorted(zip(values, targets), key=lambda item: item[0])
+    sorted_values = [v for v, _ in pairs]
+    sorted_targets = [t for _, t in pairs]
+
+    vmin = sorted_values[0]
+    vmax = sorted_values[-1]
+    if math.isclose(vmin, vmax):
+        return [vmin, vmax + 1.0]
+
+    prefix_events = [0]
+    for t in sorted_targets:
+        prefix_events.append(prefix_events[-1] + int(t))
+
+    segments: list[tuple[int, int]] = [(0, len(sorted_values))]
+    thresholds: list[float] = []
+
+    for _ in range(max(0, n_bins - 1)):
+        best_gain = 0.0
+        best_segment_idx: int | None = None
+        best_split_idx: int | None = None
+
+        for seg_idx, (start, end) in enumerate(segments):
+            split_idx, gain = _best_tree_split(
+                sorted_values, prefix_events, start=start, end=end
+            )
+            if split_idx is None:
+                continue
+            if gain > best_gain:
+                best_gain = gain
+                best_segment_idx = seg_idx
+                best_split_idx = split_idx
+
+        if best_segment_idx is None or best_split_idx is None:
+            break
+
+        start, end = segments.pop(best_segment_idx)
+        split_idx = best_split_idx
+        threshold = (sorted_values[split_idx] + sorted_values[split_idx + 1]) / 2.0
+        thresholds.append(float(threshold))
+        segments.append((start, split_idx + 1))
+        segments.append((split_idx + 1, end))
+
+    unique_edges = sorted(set([float(vmin), *thresholds, float(vmax)]))
+    if len(unique_edges) < 2:
+        unique_edges = [float(vmin), float(vmax)]
+    if math.isclose(unique_edges[0], unique_edges[-1]):
+        unique_edges[-1] = unique_edges[-1] + 1.0
+    return unique_edges
 
 
-def _try_import_numpy() -> Any:
+def _best_tree_split(
+    sorted_values: list[float],
+    prefix_events: list[int],
+    *,
+    start: int,
+    end: int,
+) -> tuple[int | None, float]:
+    total_count = end - start
+    if total_count < 2:
+        return None, 0.0
+
+    total_events = prefix_events[end] - prefix_events[start]
+    parent_impurity = _gini_impurity(total_events, total_count)
+
+    best_gain = 0.0
+    best_split_idx: int | None = None
+    for split_idx in range(start, end - 1):
+        if math.isclose(sorted_values[split_idx], sorted_values[split_idx + 1]):
+            continue
+
+        left_count = split_idx - start + 1
+        right_count = total_count - left_count
+        left_events = prefix_events[split_idx + 1] - prefix_events[start]
+        right_events = total_events - left_events
+
+        left_impurity = _gini_impurity(left_events, left_count)
+        right_impurity = _gini_impurity(right_events, right_count)
+        child_impurity = (
+            (left_count / total_count) * left_impurity
+            + (right_count / total_count) * right_impurity
+        )
+        gain = parent_impurity - child_impurity
+        if gain > best_gain:
+            best_gain = gain
+            best_split_idx = split_idx
+
+    return best_split_idx, best_gain
+
+
+def _gini_impurity(events: int, count: int) -> float:
+    if count <= 0:
+        return 0.0
+    p = events / count
+    return 2.0 * p * (1.0 - p)
+
+
+@lru_cache(maxsize=1)
+def _try_import_pandas() -> ModuleType | None:
     try:
-        import numpy as np
+        return import_module("pandas")
     except ImportError:
         return None
-    return np
+
+
+@lru_cache(maxsize=1)
+def _try_import_numpy() -> ModuleType | None:
+    try:
+        return import_module("numpy")
+    except ImportError:
+        return None
