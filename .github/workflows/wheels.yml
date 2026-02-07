@@ -31,7 +31,7 @@ jobs:
       - name: Wheel smoke test
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --force-reinstall dist/*.whl
+          python -m pip install --force-reinstall --no-deps dist/*.whl
           python -c "from fastwoe import FastWoe, WoePreprocessor; m=FastWoe(); m.fit(['A','B','A'], [1,0,1]); assert len(m.predict_proba(['A','B']))==2; p=WoePreprocessor(n_bins=2, binning_method='quantile'); out=p.fit_transform([[1.0],[2.0],[3.0]], numerical_features=[0]); assert len(out)==3"
 
       - name: Upload wheel artifacts
@@ -63,7 +63,7 @@ jobs:
       - name: Wheel smoke test
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --force-reinstall dist/*.whl
+          python -m pip install --force-reinstall --no-deps dist/*.whl
           python -c "from fastwoe import FastWoe, WoePreprocessor; m=FastWoe(); m.fit(['A','B','A'], [1,0,1]); assert len(m.predict_proba(['A','B']))==2; p=WoePreprocessor(n_bins=2, binning_method='quantile'); out=p.fit_transform([[1.0],[2.0],[3.0]], numerical_features=[0]); assert len(out)==3"
 
       - name: Upload wheel artifacts
@@ -92,9 +92,13 @@ jobs:
           python -m maturin build --release --out dist --manifest-path crates/fastwoe-py/Cargo.toml -i python
 
       - name: Wheel smoke test
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --force-reinstall dist/*.whl
+          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          if (-not $wheel) { throw "No wheel found in dist/" }
+          python -m pip install --force-reinstall --no-deps $wheel.FullName
+          python -c "import fastwoe; print(f'fastwoe import path: {fastwoe.__file__}')"
           python -c "from fastwoe import FastWoe, WoePreprocessor; m=FastWoe(); m.fit(['A','B','A'], [1,0,1]); assert len(m.predict_proba(['A','B']))==2; p=WoePreprocessor(n_bins=2, binning_method='quantile'); out=p.fit_transform([[1.0],[2.0],[3.0]], numerical_features=[0]); assert len(out)==3"
 
       - name: Upload wheel artifacts
