@@ -163,6 +163,7 @@ Project is considered actualized when all conditions are met:
 - KBins-style `kmeans` numerical binning was added to `WoePreprocessor`.
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
+- Deterministic invariant/property-style tests were added for probability bounds, CI validity, and monotonic stability.
 
 ## 13) Developer setup (maturin + PyO3 extension)
 
