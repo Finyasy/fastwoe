@@ -144,14 +144,27 @@ class WoePreprocessor:
         if self._rust_numeric_backend is not None and self._numeric_idxs:
             monotonic_pairs = sorted(monotonic_map.items())
             backend_rows = self._to_numeric_backend_rows(rows)
-            self._rust_numeric_backend.fit(
-                backend_rows,
-                self._feature_names,
-                self._numeric_idxs,
-                target_rows,
-                monotonic_pairs if monotonic_pairs else None,
-            )
-            numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            try:
+                self._rust_numeric_backend.fit(
+                    backend_rows,
+                    self._feature_names,
+                    self._numeric_idxs,
+                    target_rows,
+                    monotonic_pairs if monotonic_pairs else None,
+                )
+                numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            except TypeError as exc:
+                if not _is_legacy_numeric_backend_type_error(exc):
+                    raise
+                legacy_rows = self._to_numeric_backend_rows_legacy(rows)
+                self._rust_numeric_backend.fit(
+                    legacy_rows,
+                    self._feature_names,
+                    self._numeric_idxs,
+                    target_rows,
+                    monotonic_pairs if monotonic_pairs else None,
+                )
+                numeric_backend_out = self._rust_numeric_backend.transform(legacy_rows)
             rows_for_cat = _merge_numeric_backend_rows(
                 rows, numeric_backend_out, self._numeric_idxs
             )
@@ -199,8 +212,10 @@ class WoePreprocessor:
                 )
             rows_for_cat = self._apply_numeric_binning(rows)
         if self._rust_backend is not None and self._selected_idxs:
-            backend_rows = self._to_backend_rows(rows_for_cat)
-            self._rust_backend.fit(backend_rows, self._feature_names, self._selected_idxs)
+            backend_rows = self._to_selected_backend_rows(rows_for_cat)
+            backend_feature_names = [self._feature_names[idx] for idx in self._selected_idxs]
+            backend_selected = list(range(len(self._selected_idxs)))
+            self._rust_backend.fit(backend_rows, backend_feature_names, backend_selected)
             backend_summary = self._rust_backend.get_reduction_summary()
             self._summary_rows.extend(_summary_rows_to_dicts(backend_summary))
         else:
@@ -236,7 +251,14 @@ class WoePreprocessor:
         rows_raw, meta = _coerce_rows(X)
         if self._rust_numeric_backend is not None and self._numeric_idxs and rows_raw:
             backend_rows = self._to_numeric_backend_rows(rows_raw)
-            numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            try:
+                numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            except TypeError as exc:
+                if not _is_legacy_numeric_backend_type_error(exc):
+                    raise
+                numeric_backend_out = self._rust_numeric_backend.transform(
+                    self._to_numeric_backend_rows_legacy(rows_raw)
+                )
             rows = _merge_numeric_backend_rows(
                 rows_raw, numeric_backend_out, self._numeric_idxs
             )
@@ -245,12 +267,12 @@ class WoePreprocessor:
         transformed = []
 
         if self._rust_backend is not None and self._selected_idxs and rows:
-            backend_rows = self._to_backend_rows(rows)
+            backend_rows = self._to_selected_backend_rows(rows)
             backend_out = self._rust_backend.transform(backend_rows)
             for row, backend_row in zip(rows, backend_out):
                 out_row = list(row)
-                for idx in self._selected_idxs:
-                    out_row[idx] = backend_row[idx]
+                for backend_idx, source_idx in enumerate(self._selected_idxs):
+                    out_row[source_idx] = backend_row[backend_idx]
                 transformed.append(out_row)
             return _restore_output(transformed, meta)
 
@@ -336,20 +358,29 @@ class WoePreprocessor:
 
         return set(keep)
 
-    def _to_backend_rows(self, rows: list[list[Any]]) -> list[list[str]]:
-        selected = set(self._selected_idxs)
+    def _to_selected_backend_rows(self, rows: list[list[Any]]) -> list[list[str]]:
         out: list[list[str]] = []
         for row in rows:
             out_row: list[str] = []
-            for idx, value in enumerate(row):
-                if idx in selected:
-                    out_row.append(self._normalize_value(value))
-                else:
-                    out_row.append(str(value))
+            for idx in self._selected_idxs:
+                out_row.append(self._normalize_value(row[idx]))
             out.append(out_row)
         return out
 
-    def _to_numeric_backend_rows(self, rows: list[list[Any]]) -> list[list[str]]:
+    def _to_numeric_backend_rows(self, rows: list[list[Any]]) -> list[list[float | None]]:
+        numeric = set(self._numeric_idxs)
+        out: list[list[float | None]] = []
+        for row in rows:
+            out_row: list[float | None] = []
+            for idx, value in enumerate(row):
+                if idx not in numeric:
+                    out_row.append(None)
+                    continue
+                out_row.append(_try_float(value))
+            out.append(out_row)
+        return out
+
+    def _to_numeric_backend_rows_legacy(self, rows: list[list[Any]]) -> list[list[str]]:
         out: list[list[str]] = []
         for row in rows:
             out_row: list[str] = []
@@ -461,6 +492,11 @@ def _merge_numeric_backend_rows(
             merged[idx] = backend_row[idx]
         out.append(merged)
     return out
+
+
+def _is_legacy_numeric_backend_type_error(exc: TypeError) -> bool:
+    text = str(exc)
+    return "instance of 'str'" in text and "rows" in text
 
 
 def _resolve_feature_indices(cat_features: Any, feature_names: list[str]) -> list[int]:
