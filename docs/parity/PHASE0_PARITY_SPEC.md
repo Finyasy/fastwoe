@@ -21,7 +21,8 @@ Chosen MVP cut: `binary + multiclass + confidence intervals` (already implemente
 
 Out of MVP (remaining):
 - Production FAISS packaging/CI support across platforms (optional milestone).
-- Full Rust-core parity for monotonic constraints and high-cardinality preprocessor logic.
+- Optional FAISS numerical binning remains Python-backed; Rust-core now covers
+  quantile/uniform/kmeans/tree numerical binning and monotonic constraints.
 
 ## 3) Numeric Tolerances
 Default tolerances for parity tests:
