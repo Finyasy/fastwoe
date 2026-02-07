@@ -127,6 +127,34 @@ model.fit_matrix_multiclass(rows, ["c0", "c1", "c2", "c0"], feature_names=["cat"
 iv_c0 = model.get_iv_analysis_multiclass("c0", alpha=0.05)
 ```
 
+## High-Cardinality Preprocessing
+```python
+from fastwoe import WoePreprocessor, FastWoe
+
+rows = [
+    ["cat_1", "segment_a"],
+    ["cat_1", "segment_b"],
+    ["cat_2", "segment_a"],
+    ["cat_99", "segment_z"],  # rare
+]
+
+pre = WoePreprocessor(top_p=0.9, min_count=2, max_categories=20)
+rows_reduced = pre.fit_transform(rows)
+summary = pre.get_reduction_summary()
+
+model = FastWoe()
+model.fit_matrix(rows_reduced, [1, 0, 0, 1], feature_names=["merchant", "segment"])
+```
+
+Numerical binning is also supported before WOE:
+```python
+from fastwoe import WoePreprocessor
+
+rows = [[1000.0, "A"], [1200.0, "B"], [1400.0, "C"], [None, "D"]]
+pre = WoePreprocessor(n_bins=3, binning_method="quantile")
+rows_binned = pre.fit_transform(rows, numerical_features=[0], cat_features=[1])
+```
+
 ## Pandas Output Mode
 ```python
 import pandas as pd
