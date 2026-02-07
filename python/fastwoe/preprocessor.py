@@ -29,7 +29,7 @@ class WoePreprocessor:
     - top_p: keep categories until cumulative frequency reaches this ratio.
     - min_count: categories below this count are grouped as other.
     - n_bins: number of bins for numeric features.
-    - binning_method: one of {'quantile', 'uniform', 'tree'}.
+    - binning_method: one of {'quantile', 'uniform', 'kmeans', 'tree'}.
     - other_token: replacement token for grouped categories.
     - missing_token: canonical token for missing values.
     """
@@ -52,8 +52,10 @@ class WoePreprocessor:
             raise ValueError("min_count must be positive.")
         if n_bins <= 1:
             raise ValueError("n_bins must be greater than 1.")
-        if binning_method not in {"quantile", "uniform", "tree"}:
-            raise ValueError("binning_method must be one of: {'quantile', 'uniform', 'tree'}.")
+        if binning_method not in {"quantile", "uniform", "kmeans", "tree"}:
+            raise ValueError(
+                "binning_method must be one of: {'quantile', 'uniform', 'kmeans', 'tree'}."
+            )
 
         self.max_categories = max_categories
         self.top_p = top_p
@@ -454,6 +456,9 @@ def _compute_bin_edges(
                 "tree binning requires targets aligned with non-missing numerical rows."
             )
         return _compute_tree_bin_edges(values, targets, n_bins=n_bins)
+    if method == "kmeans":
+        return _compute_kmeans_bin_edges(values, n_bins=n_bins)
+
     np = _try_import_numpy()
     if np is None:
         raise RuntimeError("numpy is required for numerical binning.")
@@ -556,6 +561,57 @@ def _compute_tree_bin_edges(values: list[float], targets: list[int], n_bins: int
     unique_edges = sorted(set([float(vmin), *thresholds, float(vmax)]))
     if len(unique_edges) < 2:
         unique_edges = [float(vmin), float(vmax)]
+    if math.isclose(unique_edges[0], unique_edges[-1]):
+        unique_edges[-1] = unique_edges[-1] + 1.0
+    return unique_edges
+
+
+def _compute_kmeans_bin_edges(values: list[float], n_bins: int, max_iter: int = 100) -> list[float]:
+    np = _try_import_numpy()
+    if np is None:
+        raise RuntimeError("numpy is required for kmeans numerical binning.")
+
+    arr = np.array(values, dtype=float)
+    vmin = float(np.min(arr))
+    vmax = float(np.max(arr))
+    if math.isclose(vmin, vmax):
+        return [vmin, vmax + 1.0]
+
+    unique_values = np.unique(arr)
+    k = int(min(n_bins, unique_values.size))
+    if k <= 1:
+        return [vmin, vmax]
+
+    centers = np.quantile(arr, np.linspace(0.0, 1.0, k))
+    centers = np.array(sorted(set(float(c) for c in centers)), dtype=float)
+    if centers.size < 2:
+        return [vmin, vmax]
+
+    k = int(centers.size)
+    for _ in range(max_iter):
+        distances = np.abs(arr[:, None] - centers[None, :])
+        labels = np.argmin(distances, axis=1)
+
+        new_centers = centers.copy()
+        for idx in range(k):
+            mask = labels == idx
+            if np.any(mask):
+                new_centers[idx] = float(np.mean(arr[mask]))
+
+        new_centers = np.array(sorted(new_centers.tolist()), dtype=float)
+        if np.allclose(new_centers, centers, rtol=0.0, atol=1e-10):
+            break
+        centers = new_centers
+
+    centers = np.array(sorted(set(float(c) for c in centers)), dtype=float)
+    if centers.size < 2:
+        return [vmin, vmax]
+
+    midpoints = (centers[:-1] + centers[1:]) / 2.0
+    edges = [vmin, *[float(v) for v in midpoints], vmax]
+    unique_edges = sorted(set(float(v) for v in edges))
+    if len(unique_edges) < 2:
+        unique_edges = [vmin, vmax]
     if math.isclose(unique_edges[0], unique_edges[-1]):
         unique_edges[-1] = unique_edges[-1] + 1.0
     return unique_edges
