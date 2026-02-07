@@ -3,6 +3,11 @@ Fast Weight of Evidence (WOE) Encoding and Inference
 
 This repository is scaffolded as a Rust workspace with PyO3 bindings for Python.
 
+## Current Status
+- Rust core and PyO3 bindings are active for model and preprocessing paths.
+- Binary and multiclass inference with CI/IV analysis are available.
+- FAISS remains an optional Python-path binning method; it is **not** promoted to Rust-core implementation based on current benchmark results (`docs/performance/FAISS_DECISION_BENCHMARK.md`).
+
 ## Workspace
 - `crates/fastwoe-core`: pure Rust WOE/statistics engine.
 - `crates/fastwoe-py`: PyO3 extension module (`fastwoe_rs`).
@@ -13,19 +18,42 @@ This repository is scaffolded as a Rust workspace with PyO3 bindings for Python.
 3. Install maturin:
    `python -m pip install maturin`
 
+## Recommended Environments
+- General development/runtime:
+  - Python 3.9+ with project dependencies from `pyproject.toml`.
+- FAISS benchmarking/runtime (recommended separate env):
+  - Use `numpy<2` with `faiss-cpu` to avoid NumPy ABI issues in some FAISS builds.
+  - Example:
+    `conda create -n fastwoe-faiss -c conda-forge python=3.12 numpy=1.26 pandas faiss-cpu maturin pytest ruff`
+
 ## Local Development
 1. Rust checks:
    `cargo fmt --all`
    `cargo clippy --all-targets --all-features -D warnings`
    `cargo test --all-features`
 2. Build/install Python extension in active environment:
-   `maturin develop --manifest-path crates/fastwoe-py/Cargo.toml`
+   `maturin develop --release --manifest-path crates/fastwoe-py/Cargo.toml`
+
+## CI-Equivalent Local Repro (No Index Fetch)
+If dependencies are already installed in a conda env (for example `fastwoe-faiss`), run:
+
+`bash scripts/repro_ci_local.sh fastwoe-faiss`
+
+This reproduces the CI-critical path without fetching packages from pip indexes:
+- release wheel build + install
+- parity/preprocessor/invariant tests
+- end-to-end latency threshold checks for `kmeans` and `tree`
+
+This flow was validated on February 7, 2026.
 
 ## Python Tooling
 Ruff and Python dev settings are configured in `pyproject.toml`.
 
 Optional FAISS path (Linux):
 `python -m pip install '.[faiss]'`
+
+On macOS, install FAISS with conda-forge:
+`conda install -c conda-forge faiss-cpu`
 
 ## Quick Python Usage
 ```python
@@ -180,6 +208,9 @@ pre = WoePreprocessor(n_bins=3, binning_method="faiss")
 rows_binned = pre.fit_transform(rows, numerical_features=[0])
 ```
 
+Current benchmark decision: keep FAISS optional (do not move to Rust-core yet).
+See `docs/performance/FAISS_DECISION_BENCHMARK.md` for measured results.
+
 Supervised tree-style numerical binning is available for binary targets:
 ```python
 from fastwoe import WoePreprocessor
@@ -226,10 +257,38 @@ proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
   `python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml`
 - Run core performance benchmarks:
   `cargo bench -p fastwoe-core --bench woe_simulation`
+- Run FAISS-vs-kmeans decision benchmark:
+  `python tools/benchmark_faiss_decision.py --methods kmeans tree faiss --sizes 10000 100000 --output docs/performance/`
+- Run preprocessor memory benchmark:
+  `python tools/benchmark_preprocessor_memory.py --methods kmeans tree --sizes 10000 --output benchmark-artifacts/`
+- Validate end-to-end latency thresholds:
+  `python tools/check_preprocessor_latency_thresholds.py --report benchmark-artifacts/FAISS_DECISION_BENCHMARK.md --threshold kmeans:10000:120:180 --threshold tree:10000:120:160`
+- Validate end-to-end memory thresholds:
+  `python tools/check_preprocessor_memory_thresholds.py --report benchmark-artifacts/PREPROCESSOR_MEMORY_BENCHMARK.md --threshold kmeans:10000:150:190 --threshold tree:10000:150:190`
+- Validate FAISS memory soft regression ratios (scheduled benchmark scope):
+  `python tools/check_faiss_memory_regression.py --report docs/performance/PREPROCESSOR_MEMORY_BENCHMARK.md --sizes 10000 100000 --max-pre-delta-ratio 1.5 --max-e2e-delta-ratio 1.5`
 - Release profile is tuned for runtime speed (`lto=fat`, `codegen-units=1`, stripped symbols).
+
+Latest FAISS decision snapshot (`docs/performance/FAISS_DECISION_BENCHMARK.md`):
+- 10k rows preprocess best: `kmeans 32.126 ms` vs `faiss 47.869 ms`
+- 100k rows preprocess best: `kmeans 453.994 ms` vs `faiss 493.762 ms`
+- End-to-end best (preprocess + fit + predict): `kmeans 49.710/616.789 ms` vs `faiss 58.275/650.255 ms`
+- Outcome: do not implement Rust-core FAISS yet.
+
+## Troubleshooting
+- `maturin failed: rustc is not installed`:
+  install Rust via rustup and ensure `cargo` is on PATH.
+- `Unable to find maturin script` (often in conda/venv mixed setups):
+  add `$CONDA_PREFIX/bin` to PATH and run `maturin` CLI directly, or use
+  `bash scripts/repro_ci_local.sh <conda-env>`.
+- `ImportError: numpy.core.multiarray failed to import` when importing `faiss`:
+  use a separate environment with `numpy<2` and reinstall FAISS in that env.
+- Extension import problems after Python/env change:
+  rerun `python -m maturin develop --release --manifest-path crates/fastwoe-py/Cargo.toml`.
 
 ## CI and Release
 - CI workflow: `.github/workflows/ci.yml`
 - Wheels workflow: `.github/workflows/wheels.yml`
 - Benchmark workflow: `.github/workflows/benchmarks.yml`
 - Release checklist: `docs/release/RELEASE_CHECKLIST.md`
+- Migration + limitations: `docs/release/MIGRATION_AND_LIMITATIONS.md`
