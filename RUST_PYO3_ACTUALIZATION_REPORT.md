@@ -151,10 +151,10 @@ Project is considered actualized when all conditions are met:
 - Documentation includes migration and known limitations.
 
 ## 11) Immediate Next Actions
-- Confirm required API parity level (strict vs pragmatic).
-- Select MVP cut for first release (`binary + basic stats` or `binary + multiclass`).
-- Approve benchmark datasets and tolerance thresholds.
-- Begin Phase 0 parity spec document and fixture extraction.
+- Keep extension-backed parity checks in CI for the Rust numeric preprocessor path.
+- Decide whether FAISS remains an optional Python path or gets a Rust-core implementation.
+- Expand preprocessing benchmarks (latency + throughput) for quantile/kmeans/tree binning.
+- Complete release hardening (wheel matrix, smoke tests, migration notes).
 
 ## 12) Implementation Progress Update
 - Parity mode and MVP scope were formalized in `docs/parity/PHASE0_PARITY_SPEC.md`.
@@ -162,6 +162,11 @@ Project is considered actualized when all conditions are met:
 - Phase 4 advanced-feature progress includes supervised `tree` numerical binning in `WoePreprocessor` for binary targets.
 - KBins-style `kmeans` numerical binning was added to `WoePreprocessor`.
 - Optional FAISS-backed numerical binning path was added to `WoePreprocessor` when `faiss` is installed.
+- CI now includes a Linux FAISS optional-path validation job.
+- High-cardinality categorical reduction logic now has a Rust-core (`PreprocessorCore`) path via PyO3.
+- Numerical binning now has a Rust-core path (`NumericBinnerCore`) exposed via PyO3 (`RustNumericBinner`) for `quantile`, `uniform`, `kmeans`, and `tree`.
+- Monotonic-constraint edge enforcement for numerical bins now runs in Rust core when the Rust backend is available.
+- Python parity tests now include Rust-vs-Python checks for numeric preprocessor paths (quantile, kmeans, tree, monotonic).
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
 - Deterministic invariant/property-style tests were added for probability bounds, CI validity, and monotonic stability.
