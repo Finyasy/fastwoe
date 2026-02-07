@@ -41,14 +41,30 @@ This checklist implements Phase 5 (Packaging and Release) from
 - Ensure the optional `FAISS Optional Path` CI job is green (Linux).
 - Trigger `Wheels` workflow and verify artifacts for Linux/macOS/Windows.
 - Confirm wheel smoke tests pass on Linux/macOS/Windows jobs.
+- Confirm `Source distribution (sdist)` job is green in `Wheels`.
 - Confirm scheduled/manual benchmark workflow runs and uploads artifacts.
 - Confirm new validation docs are reflected in release notes:
   `docs/validation/ASSUMPTIONS_AND_LIMITATIONS.md`
 - Reproduce CI-critical local flow before release:
   `bash scripts/repro_ci_local.sh fastwoe-faiss`
 
-## 6) Publish Readiness
+## 6) Publish Setup (One-Time)
+- Configure PyPI Trusted Publisher for this repository/workflow:
+- Owner/repo: `Finyasy/fastwoe`
+- Workflow: `.github/workflows/wheels.yml`
+- Environment: `pypi`
+- Configure TestPyPI Trusted Publisher with the same workflow and environment:
+- Environment: `testpypi`
+
+## 7) Publish Readiness
 - Tag release (`vX.Y.Z`) only when all gates pass.
-- Publish wheels from CI artifacts or release pipeline.
+- Push tag to publish to PyPI automatically:
+  `git tag vX.Y.Z && git push origin vX.Y.Z`
+- For dry-runs, run `Wheels` manually with `publish_to=none`.
+- For TestPyPI publish, run `Wheels` manually with `publish_to=testpypi`.
+- For manual PyPI publish (no new tag), run `Wheels` manually with `publish_to=pypi`.
+- Verify published files on:
+- PyPI: `https://pypi.org/project/fastwoe-rs/`
+- TestPyPI: `https://test.pypi.org/project/fastwoe-rs/`
 - Validate release performance on a real credit-scoring dataset:
   `python tools/benchmark_real_dataset.py --input-csv /path/to/credit.csv --target-col <target> --methods kmeans tree --threshold kmeans:<pre_ms>:<e2e_ms> --threshold tree:<pre_ms>:<e2e_ms>`

@@ -175,6 +175,7 @@ Project is considered actualized when all conditions are met:
 - Performance hardening now includes preprocessor benchmark groups (categorical and numeric) with CI smoke thresholds for numeric quantile transform throughput.
 - CI now verifies Rust extension preprocessor backends are present and includes invariant tests in the quality gate suite.
 - Wheels CI now performs install/import/fit smoke tests on Linux/macOS/Windows before uploading artifacts.
+- Wheels CI now builds Linux/macOS/Windows wheels plus sdist, and supports publish jobs to TestPyPI/PyPI via trusted publishing.
 - Migration and known limitations documentation is now tracked in `docs/release/MIGRATION_AND_LIMITATIONS.md`.
 - FAISS decision benchmarking harness was added at `tools/benchmark_faiss_decision.py`, with current baseline output captured in `docs/performance/FAISS_DECISION_BENCHMARK.md`.
 - FAISS decision is currently to keep FAISS as an optional Python path; measured benchmarks did not justify Rust-core FAISS integration.
@@ -190,6 +191,7 @@ Project is considered actualized when all conditions are met:
 - Validation assumption guardrails are now documented in `docs/validation/ASSUMPTIONS_AND_LIMITATIONS.md`.
 - FastWoe now includes assumption-risk diagnostics for strong feature dependence and ultra-sparse categories, with runtime warnings surfaced on probability/CI APIs and opt-out support.
 - Release checklist now includes explicit FAISS optional-path and non-FAISS fallback validation steps.
+- Release flow now supports manual publish targets (`publish_to=none|testpypi|pypi`) and tag-driven PyPI publish (`v*`).
 
 ## 13) FAISS Decision Outcome (2026-02-07)
 Decision source: `docs/performance/FAISS_DECISION_BENCHMARK.md`

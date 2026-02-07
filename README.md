@@ -309,3 +309,15 @@ Latest FAISS decision snapshot (`docs/performance/FAISS_DECISION_BENCHMARK.md`):
 - Benchmark workflow: `.github/workflows/benchmarks.yml`
 - Release checklist: `docs/release/RELEASE_CHECKLIST.md`
 - Migration + limitations: `docs/release/MIGRATION_AND_LIMITATIONS.md`
+
+Publishing flow (`Wheels`):
+- `push` tag `v*` builds Linux/macOS/Windows wheels + sdist, then publishes to PyPI.
+- Manual run with input `publish_to`:
+- `none`: build-only (artifact validation, no publish)
+- `testpypi`: publish to TestPyPI
+- `pypi`: publish to PyPI (without creating a new tag)
+
+Trusted publishing setup (required once on PyPI/TestPyPI):
+- Repository: `Finyasy/fastwoe`
+- Workflow: `.github/workflows/wheels.yml`
+- Environments: `pypi` and `testpypi`
