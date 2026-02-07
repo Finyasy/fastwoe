@@ -128,7 +128,7 @@ impl RustNumericBinner {
     #[pyo3(signature = (rows, feature_names, numeric_feature_indices, targets=None, monotonic_directions=None))]
     fn fit(
         &mut self,
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<Option<f64>>>,
         feature_names: Vec<String>,
         numeric_feature_indices: Vec<usize>,
         targets: Option<Vec<u8>>,
@@ -145,7 +145,7 @@ impl RustNumericBinner {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
-    fn transform(&self, rows: Vec<Vec<String>>) -> PyResult<Vec<Vec<String>>> {
+    fn transform(&self, rows: Vec<Vec<Option<f64>>>) -> PyResult<Vec<Vec<String>>> {
         self.inner
             .transform(&rows)
             .map_err(|e| PyValueError::new_err(e.to_string()))
@@ -154,7 +154,7 @@ impl RustNumericBinner {
     #[pyo3(signature = (rows, feature_names, numeric_feature_indices, targets=None, monotonic_directions=None))]
     fn fit_transform(
         &mut self,
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<Option<f64>>>,
         feature_names: Vec<String>,
         numeric_feature_indices: Vec<usize>,
         targets: Option<Vec<u8>>,
