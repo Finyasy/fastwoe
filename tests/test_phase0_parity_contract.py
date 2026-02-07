@@ -143,6 +143,52 @@ def test_preprocessor_phase0_parity_contract() -> None:
         )
 
 
+def test_credit_scoring_phase0_parity_contract() -> None:
+    fixture = _load_fixture()["credit_scoring"]
+
+    model = FastWoe()
+    model.fit_matrix(fixture["rows"], fixture["targets"], feature_names=fixture["feature_names"])
+
+    _assert_deep_close(
+        _mapping_rows_to_dict(model.get_feature_mapping(fixture["feature_names"][0])),
+        fixture["mapping"],
+        abs_tol=1e-12,
+        rel_tol=1e-12,
+    )
+    _assert_deep_close(
+        model.transform_matrix(fixture["query_rows"]),
+        fixture["query_transform_matrix"],
+        abs_tol=1e-9,
+        rel_tol=1e-9,
+    )
+    _assert_deep_close(
+        model.predict_proba_matrix(fixture["query_rows"]),
+        fixture["query_predict_proba_matrix"],
+        abs_tol=1e-9,
+        rel_tol=1e-9,
+    )
+    _assert_deep_close(
+        model.predict_ci_matrix(fixture["query_rows"], alpha=0.05),
+        fixture["query_predict_ci_matrix_alpha_0_05"],
+        abs_tol=1e-8,
+        rel_tol=1e-8,
+    )
+
+    worked = fixture["worked_example_raw"]
+    assert math.isclose(
+        worked["posterior_odds"],
+        worked["prior_odds"] * worked["factor"],
+        abs_tol=1e-12,
+        rel_tol=1e-12,
+    )
+    assert math.isclose(
+        worked["posterior_prob"],
+        worked["posterior_odds"] / (1.0 + worked["posterior_odds"]),
+        abs_tol=1e-12,
+        rel_tol=1e-12,
+    )
+
+
 def _iv_rows_to_dict(rows: list[Any]) -> list[dict]:
     return [
         {
@@ -152,6 +198,19 @@ def _iv_rows_to_dict(rows: list[Any]) -> list[dict]:
             "iv_ci_lower": row.iv_ci_lower,
             "iv_ci_upper": row.iv_ci_upper,
             "iv_significance": row.iv_significance,
+        }
+        for row in rows
+    ]
+
+
+def _mapping_rows_to_dict(rows: list[Any]) -> list[dict]:
+    return [
+        {
+            "category": row.category,
+            "event_count": row.event_count,
+            "non_event_count": row.non_event_count,
+            "woe": row.woe,
+            "woe_se": row.woe_se,
         }
         for row in rows
     ]

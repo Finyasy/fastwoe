@@ -36,6 +36,7 @@ def build_fixture() -> dict:
     )
 
     preprocessor_cases = _build_preprocessor_cases()
+    credit_scoring_fixture = _build_credit_scoring_fixture()
 
     return {
         "fixture_version": "phase0_v1",
@@ -77,6 +78,7 @@ def build_fixture() -> dict:
             ),
         },
         "preprocessor": preprocessor_cases,
+        "credit_scoring": credit_scoring_fixture,
     }
 
 
@@ -162,6 +164,66 @@ def _build_preprocessor_cases() -> dict:
     }
 
 
+def _build_credit_scoring_fixture() -> dict:
+    # Deterministic synthetic counts that mirror the worked credit-usage example:
+    # >90% usage has a much higher default likelihood than <=90%.
+    usage_rows = (
+        [["<=90"]] * 81
+        + [["<=90"]] * 2
+        + [[">90"]] * 9
+        + [[">90"]] * 8
+    )
+    usage_targets = ([0] * 81) + ([1] * 2) + ([0] * 9) + ([1] * 8)
+    feature_names = ["credit_usage_group"]
+
+    model = FastWoe()
+    model.fit_matrix(usage_rows, usage_targets, feature_names=feature_names)
+
+    # Raw (unsmoothed) worked-example values for roadmap and validation checks.
+    prior_odds = (10 / 100) / (90 / 100)
+    factor = (8 / 17) / (10 / 100)
+    woe_log = _safe_log(factor)
+    posterior_odds = prior_odds * factor
+    posterior_prob = posterior_odds / (1.0 + posterior_odds)
+
+    query_rows = [["<=90"], [">90"], ["__unknown__"]]
+
+    return {
+        "rows": usage_rows,
+        "targets": usage_targets,
+        "feature_names": feature_names,
+        "query_rows": query_rows,
+        "mapping": _mapping_rows_to_dict(model.get_feature_mapping(feature_names[0])),
+        "query_transform_matrix": model.transform_matrix(query_rows),
+        "query_predict_proba_matrix": model.predict_proba_matrix(query_rows),
+        "query_predict_ci_matrix_alpha_0_05": model.predict_ci_matrix(query_rows, alpha=0.05),
+        "worked_example_raw": {
+            "prior_odds": prior_odds,
+            "factor": factor,
+            "woe_log": woe_log,
+            "posterior_odds": posterior_odds,
+            "posterior_prob": posterior_prob,
+            "counts": {
+                "total": 100,
+                "non_default_total": 90,
+                "default_total": 10,
+                "gt_90_non_default": 9,
+                "gt_90_default": 8,
+                "lte_90_non_default": 81,
+                "lte_90_default": 2,
+            },
+        },
+    }
+
+
+def _safe_log(value: float) -> float:
+    if value <= 0.0:
+        raise ValueError("log input must be positive.")
+    import math
+
+    return math.log(value)
+
+
 def _iv_rows_to_dict(rows: list[object]) -> list[dict]:
     return [
         {
@@ -171,6 +233,19 @@ def _iv_rows_to_dict(rows: list[object]) -> list[dict]:
             "iv_ci_lower": row.iv_ci_lower,
             "iv_ci_upper": row.iv_ci_upper,
             "iv_significance": row.iv_significance,
+        }
+        for row in rows
+    ]
+
+
+def _mapping_rows_to_dict(rows: list[object]) -> list[dict]:
+    return [
+        {
+            "category": row.category,
+            "event_count": row.event_count,
+            "non_event_count": row.non_event_count,
+            "woe": row.woe,
+            "woe_se": row.woe_se,
         }
         for row in rows
     ]

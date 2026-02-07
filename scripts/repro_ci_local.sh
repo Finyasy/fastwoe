@@ -32,11 +32,15 @@ fi
 
 cd "${REPO_ROOT}"
 
+mkdir -p dist
+rm -f dist/fastwoe_rs-*.whl
+
 echo "[repro] Building wheel"
 maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist -i "${VENV_DIR}/bin/python"
 
 echo "[repro] Installing wheel into local CI venv"
-"${VENV_DIR}/bin/python" -m pip install --force-reinstall --no-deps dist/*.whl
+WHEEL_PATH="$(ls -t dist/fastwoe_rs-*.whl | head -n 1)"
+"${VENV_DIR}/bin/python" -m pip install --force-reinstall --no-deps "${WHEEL_PATH}"
 
 echo "[repro] Running parity + preprocessor + invariants tests"
 "${VENV_DIR}/bin/python" -m pytest -q \

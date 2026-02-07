@@ -57,7 +57,12 @@ jobs:
             tests/test_phase0_parity_contract.py \
             tests/test_statistical_accuracy.py \
             tests/test_preprocessor.py \
-            tests/test_invariants.py
+            tests/test_invariants.py \
+            tests/test_bayes_woe_consistency.py \
+            tests/test_credit_scoring_monotonic_compliance.py \
+            tests/test_sparse_bin_inference_stability.py \
+            tests/test_multiclass_probability_contract.py \
+            tests/test_assumption_risk_warnings.py
 
   benchmark-smoke:
     name: Benchmark Smoke

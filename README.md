@@ -136,6 +136,21 @@ ci_multi = model.predict_ci_matrix_multiclass(rows, alpha=0.05)
 ci_c0 = model.predict_ci_matrix_class(rows, "c0", alpha=0.05)
 ```
 
+## Assumption-Risk Diagnostics
+`predict_proba*` and `predict_ci*` can emit warnings when FastWoe detects
+strong feature dependence or ultra-sparse categorical patterns in training data.
+
+```python
+from fastwoe import FastWoe
+
+model = FastWoe()
+model.fit_matrix(rows, target, feature_names=["f0", "f1"])
+diagnostics = model.get_assumption_diagnostics()
+
+# Optional: disable runtime warnings in strict pipelines.
+quiet_model = FastWoe(warn_on_assumption_risk=False)
+```
+
 ## IV Analysis (Credit-Scoring Focus)
 ```python
 from fastwoe import FastWoe

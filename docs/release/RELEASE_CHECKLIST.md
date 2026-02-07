@@ -23,6 +23,9 @@ This checklist implements Phase 5 (Packaging and Release) from
   `python tools/check_preprocessor_memory_thresholds.py ...`
 - For FAISS benchmark environments, run memory ratio soft gate:
   `python tools/check_faiss_memory_regression.py ...`
+- Validate FAISS optional path and fallback behavior:
+  `PYTHONPATH=python pytest -q tests/test_preprocessor.py -k "faiss_binning_optional or faiss_binning_executes_when_faiss_available"`
+  `PYTHONPATH=python pytest -q tests/test_preprocessor.py -k "numeric_kmeans_binning or numeric_tree_binning_uses_target_signal"`
 
 ## 4) Versioning and Changelog
 - Bump version in `pyproject.toml` and workspace package metadata if needed.
@@ -39,6 +42,8 @@ This checklist implements Phase 5 (Packaging and Release) from
 - Trigger `Wheels` workflow and verify artifacts for Linux/macOS/Windows.
 - Confirm wheel smoke tests pass on Linux/macOS/Windows jobs.
 - Confirm scheduled/manual benchmark workflow runs and uploads artifacts.
+- Confirm new validation docs are reflected in release notes:
+  `docs/validation/ASSUMPTIONS_AND_LIMITATIONS.md`
 - Reproduce CI-critical local flow before release:
   `bash scripts/repro_ci_local.sh fastwoe-faiss`
 

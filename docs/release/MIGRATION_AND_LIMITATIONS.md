@@ -3,6 +3,18 @@
 This note documents migration guidance from legacy Python-only usage to the
 Rust + PyO3 implementation, plus current limitations that are intentional.
 
+## Release 0.1.2 Additions
+
+- `FastWoe` now emits assumption-risk warnings (dependence/sparsity) on
+  probability and CI inference APIs when risk thresholds are exceeded.
+- New diagnostics endpoint:
+  - `get_assumption_diagnostics()`
+- New warning controls:
+  - `warn_on_assumption_risk` (default `True`)
+  - `min_rows_for_assumption_warnings` (default `50`)
+  - dependence/sparsity threshold knobs in `FastWoe(...)`
+- Deterministic credit-scoring parity fixtures were added to Phase 0 contracts.
+
 ## Migration Guidance
 
 1. Install a wheel build that includes `fastwoe_rs` (or build locally with `maturin`).

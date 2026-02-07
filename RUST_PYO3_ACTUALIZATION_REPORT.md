@@ -184,6 +184,12 @@ Project is considered actualized when all conditions are met:
 - Local CI-equivalent reproduction is now scripted (`scripts/repro_ci_local.sh`) and validated without pip index fetches when using a prepared conda environment.
 - Benchmark policy now includes end-to-end preprocessor memory deltas with CI threshold checks for `kmeans`/`tree`, plus scheduled `faiss` memory monitoring.
 - Memory thresholds were tightened on February 7, 2026, and scheduled benchmarks now include a FAISS-vs-kmeans memory ratio soft gate (`tools/check_faiss_memory_regression.py`).
+- Validation-roadmap test modules are now implemented for Bayes/WOE consistency, credit-scoring monotonic compliance, sparse-bin inference stability, and multiclass probability/CI contract checks.
+- CI `quality-and-parity` now executes the new validation-roadmap test modules on every push and pull request.
+- Phase 0 parity fixtures now include a deterministic credit-scoring worked example snapshot (counts, Bayes-factor arithmetic, and query-level Rust-model parity outputs).
+- Validation assumption guardrails are now documented in `docs/validation/ASSUMPTIONS_AND_LIMITATIONS.md`.
+- FastWoe now includes assumption-risk diagnostics for strong feature dependence and ultra-sparse categories, with runtime warnings surfaced on probability/CI APIs and opt-out support.
+- Release checklist now includes explicit FAISS optional-path and non-FAISS fallback validation steps.
 
 ## 13) FAISS Decision Outcome (2026-02-07)
 Decision source: `docs/performance/FAISS_DECISION_BENCHMARK.md`
@@ -269,3 +275,50 @@ Command:
 ```bash
 bash scripts/repro_ci_local.sh fastwoe-faiss
 ```
+
+## 16) Validation Signals Extracted From `images/` + `woe.md` (Roadmap Addendum)
+
+The following source artifacts were reviewed for validation-critical requirements:
+- `images/alan.png`
+- `images/default.png`
+- `images/theory.png`
+- `images/fastwoe1.png`
+- `images/woe1.png`
+- `woe.md`
+
+### Core Mathematical Validation Requirements
+- Validate Bayes factor identity: `posterior_odds = prior_odds * factor`.
+- Validate additive log-odds identity: `logit(posterior) = logit(prior) + sum(WOE_i)`.
+- Validate probability reconstruction parity: `predict_proba` must match `sigmoid(logit(prior) + sum(WOE_i))` within tolerance.
+- Validate WOE sign semantics: positive WOE increases event/default odds and negative WOE decreases event/default odds.
+- Track optional explainability output: add deciban-style explanation support (`10 * log10(factor)`) as a roadmap item.
+
+### Credit-Scoring Validation Requirements
+- Add explicit credit-scoring fixtures mirroring the worked odds-factor-WOE examples from `images/default.png`.
+- Treat monotonic constraints as compliance gates: increasing/decreasing constraints must hold after fit/transform and remain visible in summaries.
+- Enforce small-sample robustness checks: confidence intervals and standard errors must remain valid for sparse bins and rare categories.
+- Require numeric stability for IV uncertainty outputs: `iv_se`, `iv_ci_lower`, and `iv_ci_upper` must be non-contradictory.
+
+### Inference and Documentation Guardrails
+- Keep and strengthen the inference caveat from `woe.md`: `predict_proba` and `predict_ci` rely on naive-independence assumptions.
+- Add explicit user guidance for correlated features and ultra-granular categories.
+- Add a release validation checklist item confirming that assumptions are documented in API docs and release notes.
+
+### Multiclass and API Contract Requirements
+- Enforce one-vs-rest probability mass checks: each `predict_proba(X)` row must sum to `1` within tolerance.
+- Enforce class API consistency: `predict_proba_class` and `predict_ci_class` must remain consistent with full multiclass outputs.
+- Update Phase 3 acceptance criteria to include multiclass CI parity, not only multiclass probability parity.
+
+### FAISS Operational Validation Requirements
+- Keep FAISS optional (no Rust-core FAISS implementation yet), aligned with current benchmark decision.
+- Add a packaging compatibility gate from `woe.md` troubleshooting guidance.
+- Validate FAISS import behavior against NumPy compatibility constraints in a dedicated environment matrix.
+- Preserve a fallback path to `kmeans`/`tree` when FAISS is unavailable or incompatible.
+
+## 17) Roadmap Actualization Tasks Derived From This Addendum
+- Add `tests/test_bayes_woe_consistency.py` for odds/logit/probability reconstruction parity.
+- Add `tests/test_credit_scoring_monotonic_compliance.py` for monotonic direction and reproducibility.
+- Add `tests/test_sparse_bin_inference_stability.py` for CI/SE behavior under rare-count regimes.
+- Add `tests/test_multiclass_probability_contract.py` for simplex and class-specific API consistency.
+- Add `docs/validation/ASSUMPTIONS_AND_LIMITATIONS.md` capturing independence assumptions and failure modes.
+- Extend release checklist to include FAISS import-compat smoke checks and fallback-behavior validation.
