@@ -151,6 +151,7 @@ model.fit_matrix(rows_reduced, [1, 0, 0, 1], feature_names=["merchant", "segment
 
 The categorical reduction path is backed by Rust (`PreprocessorCore`) when the extension is built.
 Numerical binning (`quantile`, `uniform`, `kmeans`, `tree`) is also Rust-backed via `NumericBinnerCore`; the FAISS path remains optional/Python-backed.
+For preprocessing, numeric features are marshaled to Rust as numeric values (not full-row strings), which reduces overhead for NumPy/pandas inputs.
 
 Numerical binning is also supported before WOE:
 ```python
