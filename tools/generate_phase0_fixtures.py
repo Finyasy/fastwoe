@@ -8,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 
-from fastwoe import FastWoe
+from fastwoe import FastWoe, WoePreprocessor
 
 DEFAULT_OUTPUT = Path("tests/fixtures/parity/phase0_v1.json")
 
@@ -34,6 +34,8 @@ def build_fixture() -> dict:
     multiclass_model.fit_matrix_multiclass(
         multiclass_rows, multiclass_labels, feature_names=feature_names
     )
+
+    preprocessor_cases = _build_preprocessor_cases()
 
     return {
         "fixture_version": "phase0_v1",
@@ -73,6 +75,89 @@ def build_fixture() -> dict:
             "iv_analysis_class_c0_alpha_0_05": _iv_rows_to_dict(
                 multiclass_model.get_iv_analysis_multiclass("c0", alpha=0.05)
             ),
+        },
+        "preprocessor": preprocessor_cases,
+    }
+
+
+def _build_preprocessor_cases() -> dict:
+    quantile_rows = [
+        [1000.0, "A"],
+        [1100.0, "A"],
+        [1200.0, "B"],
+        [1300.0, "C"],
+        [1400.0, None],
+        [None, "D"],
+        [1600.0, "E"],
+    ]
+    quantile_params = {
+        "top_p": 0.7,
+        "min_count": 1,
+        "n_bins": 3,
+        "binning_method": "quantile",
+    }
+    quantile_fit_kwargs = {"numerical_features": [0], "cat_features": [1]}
+    quantile_pre = WoePreprocessor(**quantile_params)
+    quantile_transformed = quantile_pre.fit_transform(quantile_rows, **quantile_fit_kwargs)
+    quantile_summary = quantile_pre.get_reduction_summary()
+
+    kmeans_rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1], [None]]
+    kmeans_params = {"n_bins": 3, "binning_method": "kmeans"}
+    kmeans_fit_kwargs = {"numerical_features": [0]}
+    kmeans_pre = WoePreprocessor(**kmeans_params)
+    kmeans_transformed = kmeans_pre.fit_transform(kmeans_rows, **kmeans_fit_kwargs)
+    kmeans_summary = kmeans_pre.get_reduction_summary()
+
+    tree_rows = [[1.0], [2.0], [3.0], [100.0], [110.0], [120.0]]
+    tree_target = [0, 0, 0, 1, 1, 1]
+    tree_params = {"n_bins": 2, "binning_method": "tree"}
+    tree_fit_kwargs = {"numerical_features": [0], "target": tree_target}
+    tree_pre = WoePreprocessor(**tree_params)
+    tree_transformed = tree_pre.fit_transform(tree_rows, **tree_fit_kwargs)
+    tree_summary = tree_pre.get_reduction_summary()
+
+    monotonic_rows = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0], [7.0], [8.0]]
+    monotonic_target = [0, 0, 1, 1, 0, 0, 1, 1]
+    monotonic_params = {"n_bins": 4, "binning_method": "quantile"}
+    monotonic_fit_kwargs = {
+        "numerical_features": [0],
+        "target": monotonic_target,
+        "monotonic_constraints": "increasing",
+    }
+    monotonic_pre = WoePreprocessor(**monotonic_params)
+    monotonic_transformed = monotonic_pre.fit_transform(
+        monotonic_rows, **monotonic_fit_kwargs
+    )
+    monotonic_summary = monotonic_pre.get_reduction_summary()
+
+    return {
+        "quantile_mixed": {
+            "rows": quantile_rows,
+            "params": quantile_params,
+            "fit_kwargs": quantile_fit_kwargs,
+            "transformed": quantile_transformed,
+            "summary": quantile_summary,
+        },
+        "kmeans_numeric": {
+            "rows": kmeans_rows,
+            "params": kmeans_params,
+            "fit_kwargs": kmeans_fit_kwargs,
+            "transformed": kmeans_transformed,
+            "summary": kmeans_summary,
+        },
+        "tree_numeric": {
+            "rows": tree_rows,
+            "params": tree_params,
+            "fit_kwargs": tree_fit_kwargs,
+            "transformed": tree_transformed,
+            "summary": tree_summary,
+        },
+        "monotonic_increasing": {
+            "rows": monotonic_rows,
+            "params": monotonic_params,
+            "fit_kwargs": monotonic_fit_kwargs,
+            "transformed": monotonic_transformed,
+            "summary": monotonic_summary,
         },
     }
 
