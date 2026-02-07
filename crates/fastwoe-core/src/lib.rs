@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -28,6 +28,22 @@ pub enum WoeError {
     InvalidAlpha,
     #[error("smoothing must be strictly positive")]
     InvalidSmoothing,
+    #[error("max_categories must be positive when provided")]
+    InvalidMaxCategories,
+    #[error("top_p must be in (0, 1]")]
+    InvalidTopP,
+    #[error("min_count must be positive")]
+    InvalidMinCount,
+    #[error("n_bins must be greater than 1")]
+    InvalidNBins,
+    #[error("unsupported binning_method: {0}")]
+    InvalidBinningMethod(String),
+    #[error("target is required when binning_method='tree' and numerical_features are provided")]
+    MissingTargetForBinning,
+    #[error("invalid monotonic direction: {0}")]
+    InvalidMonotonicDirection(String),
+    #[error("feature index out of range: {0}")]
+    FeatureIndexOutOfRange(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +63,14 @@ pub struct IvFeatureStats {
     pub iv_ci_lower: f64,
     pub iv_ci_upper: f64,
     pub iv_significance: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreprocessorSummaryRow {
+    pub feature: String,
+    pub original_unique: usize,
+    pub reduced_unique: usize,
+    pub coverage: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,6 +208,415 @@ impl BinaryWoeModel {
             return Err(WoeError::NotFitted);
         }
         Ok(&self.stats)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreprocessorCore {
+    max_categories: Option<usize>,
+    top_p: f64,
+    min_count: usize,
+    other_token: String,
+    missing_token: String,
+    fitted: bool,
+    feature_names: Vec<String>,
+    selected_idxs: Vec<usize>,
+    allowed: HashMap<usize, HashSet<String>>,
+    summary_rows: Vec<PreprocessorSummaryRow>,
+}
+
+impl PreprocessorCore {
+    pub fn new(
+        max_categories: Option<usize>,
+        top_p: f64,
+        min_count: usize,
+        other_token: String,
+        missing_token: String,
+    ) -> Result<Self, WoeError> {
+        if let Some(v) = max_categories {
+            if v == 0 {
+                return Err(WoeError::InvalidMaxCategories);
+            }
+        }
+        if !(0.0 < top_p && top_p <= 1.0) {
+            return Err(WoeError::InvalidTopP);
+        }
+        if min_count == 0 {
+            return Err(WoeError::InvalidMinCount);
+        }
+
+        Ok(Self {
+            max_categories,
+            top_p,
+            min_count,
+            other_token,
+            missing_token,
+            fitted: false,
+            feature_names: Vec::new(),
+            selected_idxs: Vec::new(),
+            allowed: HashMap::new(),
+            summary_rows: Vec::new(),
+        })
+    }
+
+    pub fn fit(
+        &mut self,
+        rows: &[Vec<String>],
+        feature_names: &[String],
+        selected_idxs: &[usize],
+    ) -> Result<(), WoeError> {
+        let ncols = validate_matrix(rows, None)?;
+        if feature_names.len() != ncols {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+
+        let selected = stable_unique_usize(selected_idxs);
+        for &idx in &selected {
+            if idx >= ncols {
+                return Err(WoeError::FeatureIndexOutOfRange(idx));
+            }
+        }
+
+        self.feature_names = feature_names.to_vec();
+        self.selected_idxs = selected;
+        self.allowed.clear();
+        self.summary_rows.clear();
+        self.summary_rows.reserve(self.selected_idxs.len());
+
+        for &idx in &self.selected_idxs {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for row in rows {
+                let category = row[idx].clone();
+                *counts.entry(category).or_insert(0) += 1;
+            }
+            let total = counts.values().sum::<usize>();
+            let sorted_counts = sorted_counts_by_freq_then_key(&counts);
+            let keep = self.select_categories(&sorted_counts, &counts, total);
+
+            let kept_count = keep
+                .iter()
+                .map(|cat| counts.get(cat).copied().unwrap_or(0))
+                .sum::<usize>();
+            let coverage = if total > 0 {
+                kept_count as f64 / total as f64
+            } else {
+                0.0
+            };
+
+            let mut keep_set = HashSet::with_capacity(keep.len());
+            for category in &keep {
+                keep_set.insert(category.clone());
+            }
+            self.allowed.insert(idx, keep_set);
+
+            self.summary_rows.push(PreprocessorSummaryRow {
+                feature: self.feature_names[idx].clone(),
+                original_unique: counts.len(),
+                reduced_unique: keep.len() + 1,
+                coverage,
+            });
+        }
+
+        self.fitted = true;
+        Ok(())
+    }
+
+    pub fn transform(&self, rows: &[Vec<String>]) -> Result<Vec<Vec<String>>, WoeError> {
+        if !self.fitted {
+            return Err(WoeError::NotFitted);
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ncols = rows[0].len();
+        if ncols == 0 || rows.iter().any(|row| row.len() != ncols) {
+            return Err(WoeError::InvalidMatrixShape);
+        }
+        if ncols != self.feature_names.len() {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut out_row = row.clone();
+            for &idx in &self.selected_idxs {
+                let category = &row[idx];
+                let keep = self
+                    .allowed
+                    .get(&idx)
+                    .ok_or(WoeError::NotFitted)?
+                    .contains(category);
+                if !keep {
+                    out_row[idx] = self.other_token.clone();
+                }
+            }
+            out.push(out_row);
+        }
+        Ok(out)
+    }
+
+    pub fn fit_transform(
+        &mut self,
+        rows: &[Vec<String>],
+        feature_names: &[String],
+        selected_idxs: &[usize],
+    ) -> Result<Vec<Vec<String>>, WoeError> {
+        self.fit(rows, feature_names, selected_idxs)?;
+        self.transform(rows)
+    }
+
+    pub fn summary_rows(&self) -> Result<&[PreprocessorSummaryRow], WoeError> {
+        if !self.fitted {
+            return Err(WoeError::NotFitted);
+        }
+        Ok(&self.summary_rows)
+    }
+
+    fn select_categories(
+        &self,
+        sorted_counts: &[(String, usize)],
+        counts_map: &HashMap<String, usize>,
+        total: usize,
+    ) -> Vec<String> {
+        let mut keep: Vec<String> = Vec::new();
+        let mut cumulative = 0usize;
+
+        for (category, count) in sorted_counts {
+            if *count < self.min_count {
+                continue;
+            }
+            keep.push(category.clone());
+            cumulative += *count;
+            if total > 0 && (cumulative as f64 / total as f64) >= self.top_p {
+                break;
+            }
+        }
+
+        if keep.is_empty() && !sorted_counts.is_empty() {
+            keep.push(sorted_counts[0].0.clone());
+        }
+
+        if let Some(max_categories) = self.max_categories {
+            if keep.len() > max_categories {
+                keep.truncate(max_categories);
+            }
+        }
+
+        if counts_map.contains_key(&self.missing_token) && !keep.contains(&self.missing_token) {
+            if let Some(max_categories) = self.max_categories {
+                if keep.len() >= max_categories && !keep.is_empty() {
+                    let last = keep.len() - 1;
+                    keep[last] = self.missing_token.clone();
+                } else {
+                    keep.push(self.missing_token.clone());
+                }
+            } else {
+                keep.push(self.missing_token.clone());
+            }
+        }
+
+        stable_unique_strings(&keep)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumericBinningMethod {
+    Quantile,
+    Uniform,
+    Kmeans,
+    Tree,
+}
+
+impl NumericBinningMethod {
+    fn from_str(value: &str) -> Result<Self, WoeError> {
+        match value {
+            "quantile" => Ok(Self::Quantile),
+            "uniform" => Ok(Self::Uniform),
+            "kmeans" => Ok(Self::Kmeans),
+            "tree" => Ok(Self::Tree),
+            other => Err(WoeError::InvalidBinningMethod(other.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NumericBinnerCore {
+    n_bins: usize,
+    method: NumericBinningMethod,
+    missing_token: String,
+    fitted: bool,
+    feature_names: Vec<String>,
+    numeric_idxs: Vec<usize>,
+    numeric_edges: HashMap<usize, Vec<f64>>,
+    summary_rows: Vec<PreprocessorSummaryRow>,
+}
+
+impl NumericBinnerCore {
+    pub fn new(n_bins: usize, method: &str, missing_token: String) -> Result<Self, WoeError> {
+        if n_bins <= 1 {
+            return Err(WoeError::InvalidNBins);
+        }
+
+        Ok(Self {
+            n_bins,
+            method: NumericBinningMethod::from_str(method)?,
+            missing_token,
+            fitted: false,
+            feature_names: Vec::new(),
+            numeric_idxs: Vec::new(),
+            numeric_edges: HashMap::new(),
+            summary_rows: Vec::new(),
+        })
+    }
+
+    pub fn fit(
+        &mut self,
+        rows: &[Vec<String>],
+        feature_names: &[String],
+        numeric_idxs: &[usize],
+        targets: Option<&[u8]>,
+        monotonic_constraints: Option<&[(usize, String)]>,
+    ) -> Result<(), WoeError> {
+        let ncols = validate_matrix(rows, None)?;
+        if feature_names.len() != ncols {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+
+        let numeric_unique = stable_unique_usize(numeric_idxs);
+        for &idx in &numeric_unique {
+            if idx >= ncols {
+                return Err(WoeError::FeatureIndexOutOfRange(idx));
+            }
+        }
+
+        let needs_target = matches!(self.method, NumericBinningMethod::Tree)
+            || monotonic_constraints.is_some_and(|v| !v.is_empty());
+        if needs_target && targets.is_none() {
+            return Err(WoeError::MissingTargetForBinning);
+        }
+        if let Some(target_values) = targets {
+            validate_binary_targets(target_values)?;
+            if target_values.len() != rows.len() {
+                return Err(WoeError::LengthMismatch);
+            }
+        }
+
+        let monotonic_map = parse_monotonic_map(monotonic_constraints, &numeric_unique)?;
+
+        self.feature_names = feature_names.to_vec();
+        self.numeric_idxs = numeric_unique;
+        self.numeric_edges.clear();
+        self.summary_rows.clear();
+        self.summary_rows.reserve(self.numeric_idxs.len());
+
+        for &idx in &self.numeric_idxs {
+            let mut numeric_values: Vec<f64> = Vec::new();
+            let mut numeric_targets: Vec<u8> = Vec::new();
+            for (row_idx, row) in rows.iter().enumerate() {
+                if let Some(value) = try_parse_float(&row[idx]) {
+                    numeric_values.push(value);
+                    if let Some(target_values) = targets {
+                        numeric_targets.push(target_values[row_idx]);
+                    }
+                }
+            }
+
+            let mut edges = match self.method {
+                NumericBinningMethod::Quantile => {
+                    compute_quantile_bin_edges(&numeric_values, self.n_bins)
+                }
+                NumericBinningMethod::Uniform => {
+                    compute_uniform_bin_edges(&numeric_values, self.n_bins)
+                }
+                NumericBinningMethod::Kmeans => {
+                    compute_kmeans_bin_edges(&numeric_values, self.n_bins, 100)
+                }
+                NumericBinningMethod::Tree => {
+                    if numeric_targets.len() != numeric_values.len() {
+                        return Err(WoeError::LengthMismatch);
+                    }
+                    compute_tree_bin_edges(&numeric_values, &numeric_targets, self.n_bins)
+                }
+            };
+
+            if let Some(direction) = monotonic_map.get(&idx) {
+                if numeric_targets.len() != numeric_values.len() {
+                    return Err(WoeError::LengthMismatch);
+                }
+                edges =
+                    enforce_monotonic_edges(&numeric_values, &numeric_targets, &edges, direction);
+            }
+
+            self.numeric_edges.insert(idx, edges.clone());
+            let unique_non_missing = count_unique_floats(&numeric_values);
+            self.summary_rows.push(PreprocessorSummaryRow {
+                feature: self.feature_names[idx].clone(),
+                original_unique: unique_non_missing,
+                reduced_unique: (edges.len().saturating_sub(1)).max(1),
+                coverage: 1.0,
+            });
+        }
+
+        self.fitted = true;
+        Ok(())
+    }
+
+    pub fn transform(&self, rows: &[Vec<String>]) -> Result<Vec<Vec<String>>, WoeError> {
+        if !self.fitted {
+            return Err(WoeError::NotFitted);
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ncols = rows[0].len();
+        if ncols == 0 || rows.iter().any(|row| row.len() != ncols) {
+            return Err(WoeError::InvalidMatrixShape);
+        }
+        if ncols != self.feature_names.len() {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut out_row = row.clone();
+            for &idx in &self.numeric_idxs {
+                let edges = self.numeric_edges.get(&idx).ok_or(WoeError::NotFitted)?;
+                out_row[idx] = if let Some(value) = try_parse_float(&row[idx]) {
+                    bin_label(value, edges)
+                } else {
+                    self.missing_token.clone()
+                };
+            }
+            out.push(out_row);
+        }
+        Ok(out)
+    }
+
+    pub fn fit_transform(
+        &mut self,
+        rows: &[Vec<String>],
+        feature_names: &[String],
+        numeric_idxs: &[usize],
+        targets: Option<&[u8]>,
+        monotonic_constraints: Option<&[(usize, String)]>,
+    ) -> Result<Vec<Vec<String>>, WoeError> {
+        self.fit(
+            rows,
+            feature_names,
+            numeric_idxs,
+            targets,
+            monotonic_constraints,
+        )?;
+        self.transform(rows)
+    }
+
+    pub fn summary_rows(&self) -> Result<&[PreprocessorSummaryRow], WoeError> {
+        if !self.fitted {
+            return Err(WoeError::NotFitted);
+        }
+        Ok(&self.summary_rows)
     }
 }
 
@@ -808,6 +1241,490 @@ fn unique_strings(values: &[String]) -> Vec<String> {
     out
 }
 
+fn stable_unique_usize(values: &[usize]) -> Vec<usize> {
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        if seen.insert(*value) {
+            out.push(*value);
+        }
+    }
+    out
+}
+
+fn stable_unique_strings(values: &[String]) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        if seen.insert(value.clone()) {
+            out.push(value.clone());
+        }
+    }
+    out
+}
+
+fn sorted_counts_by_freq_then_key(counts: &HashMap<String, usize>) -> Vec<(String, usize)> {
+    let mut out = counts
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect::<Vec<(String, usize)>>();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
+fn parse_monotonic_map(
+    monotonic_constraints: Option<&[(usize, String)]>,
+    numeric_idxs: &[usize],
+) -> Result<HashMap<usize, String>, WoeError> {
+    let numeric_set = numeric_idxs.iter().copied().collect::<HashSet<usize>>();
+    let mut out = HashMap::new();
+    if let Some(constraints) = monotonic_constraints {
+        for (idx, direction) in constraints {
+            if !numeric_set.contains(idx) {
+                return Err(WoeError::FeatureIndexOutOfRange(*idx));
+            }
+            out.insert(*idx, normalize_monotonic_direction(direction)?);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_monotonic_direction(direction: &str) -> Result<String, WoeError> {
+    match direction.trim().to_ascii_lowercase().as_str() {
+        "increasing" | "inc" | "ascending" | "up" => Ok("increasing".to_string()),
+        "decreasing" | "dec" | "descending" | "down" => Ok("decreasing".to_string()),
+        other => Err(WoeError::InvalidMonotonicDirection(other.to_string())),
+    }
+}
+
+fn try_parse_float(value: &str) -> Option<f64> {
+    let parsed = value.parse::<f64>().ok()?;
+    if parsed.is_finite() {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
+fn count_unique_floats(values: &[f64]) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.dedup_by(|a, b| *a == *b);
+    sorted.len()
+}
+
+fn is_close(a: f64, b: f64) -> bool {
+    let rel_tol = 1e-9_f64;
+    (a - b).abs() <= rel_tol * a.abs().max(b.abs())
+}
+
+fn canonicalize_edges(mut edges: Vec<f64>) -> Vec<f64> {
+    if edges.is_empty() {
+        return vec![0.0, 1.0];
+    }
+    edges.sort_by(|a, b| a.total_cmp(b));
+    edges.dedup_by(|a, b| *a == *b);
+    if edges.len() < 2 {
+        let only = edges[0];
+        return vec![only, only + 1.0];
+    }
+    let last = edges.len() - 1;
+    if is_close(edges[0], edges[last]) {
+        edges[last] += 1.0;
+    }
+    edges
+}
+
+fn linear_quantile_sorted(sorted_values: &[f64], q: f64) -> f64 {
+    if sorted_values.len() == 1 {
+        return sorted_values[0];
+    }
+    let clamped_q = q.clamp(0.0, 1.0);
+    let h = (sorted_values.len() as f64 - 1.0) * clamped_q;
+    let lower = h.floor() as usize;
+    let upper = h.ceil() as usize;
+    if lower == upper {
+        return sorted_values[lower];
+    }
+    let weight = h - lower as f64;
+    sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+}
+
+fn compute_quantile_bin_edges(values: &[f64], n_bins: usize) -> Vec<f64> {
+    if values.is_empty() {
+        return vec![0.0, 1.0];
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let vmin = sorted[0];
+    let vmax = sorted[sorted.len() - 1];
+    if is_close(vmin, vmax) {
+        return vec![vmin, vmax + 1.0];
+    }
+
+    let mut edges = Vec::with_capacity(n_bins + 1);
+    for idx in 0..=n_bins {
+        let q = idx as f64 / n_bins as f64;
+        edges.push(linear_quantile_sorted(&sorted, q));
+    }
+    canonicalize_edges(edges)
+}
+
+fn compute_uniform_bin_edges(values: &[f64], n_bins: usize) -> Vec<f64> {
+    if values.is_empty() {
+        return vec![0.0, 1.0];
+    }
+
+    let vmin = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let vmax = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if is_close(vmin, vmax) {
+        return vec![vmin, vmax + 1.0];
+    }
+
+    let step = (vmax - vmin) / n_bins as f64;
+    let mut edges = Vec::with_capacity(n_bins + 1);
+    for idx in 0..=n_bins {
+        edges.push(vmin + step * idx as f64);
+    }
+    canonicalize_edges(edges)
+}
+
+fn vector_allclose(left: &[f64], right: &[f64], atol: f64) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(l, r)| (*l - *r).abs() <= atol)
+}
+
+fn compute_kmeans_bin_edges(values: &[f64], n_bins: usize, max_iter: usize) -> Vec<f64> {
+    if values.is_empty() {
+        return vec![0.0, 1.0];
+    }
+
+    let mut sorted_values = values.to_vec();
+    sorted_values.sort_by(|a, b| a.total_cmp(b));
+    let vmin = sorted_values[0];
+    let vmax = sorted_values[sorted_values.len() - 1];
+    if is_close(vmin, vmax) {
+        return vec![vmin, vmax + 1.0];
+    }
+
+    let mut unique_values = sorted_values.clone();
+    unique_values.dedup_by(|a, b| *a == *b);
+    let mut k = n_bins.min(unique_values.len());
+    if k <= 1 {
+        return vec![vmin, vmax];
+    }
+
+    let mut centers = Vec::with_capacity(k);
+    for idx in 0..k {
+        let q = idx as f64 / (k - 1) as f64;
+        centers.push(linear_quantile_sorted(&sorted_values, q));
+    }
+    centers.sort_by(|a, b| a.total_cmp(b));
+    centers.dedup_by(|a, b| *a == *b);
+    if centers.len() < 2 {
+        return vec![vmin, vmax];
+    }
+
+    k = centers.len();
+    for _ in 0..max_iter {
+        let mut sums = vec![0.0_f64; k];
+        let mut counts = vec![0_usize; k];
+
+        for value in values {
+            let mut best_idx = 0_usize;
+            let mut best_dist = (value - centers[0]).abs();
+            for (center_idx, center_value) in centers.iter().enumerate().skip(1) {
+                let dist = (value - center_value).abs();
+                if dist < best_dist {
+                    best_idx = center_idx;
+                    best_dist = dist;
+                }
+            }
+            sums[best_idx] += *value;
+            counts[best_idx] += 1;
+        }
+
+        let mut new_centers = centers.clone();
+        for center_idx in 0..k {
+            if counts[center_idx] > 0 {
+                new_centers[center_idx] = sums[center_idx] / counts[center_idx] as f64;
+            }
+        }
+        new_centers.sort_by(|a, b| a.total_cmp(b));
+
+        if vector_allclose(&new_centers, &centers, 1e-10) {
+            centers = new_centers;
+            break;
+        }
+        centers = new_centers;
+    }
+
+    centers.sort_by(|a, b| a.total_cmp(b));
+    centers.dedup_by(|a, b| *a == *b);
+    if centers.len() < 2 {
+        return vec![vmin, vmax];
+    }
+
+    let mut edges = Vec::with_capacity(centers.len() + 1);
+    edges.push(vmin);
+    for idx in 0..(centers.len() - 1) {
+        edges.push((centers[idx] + centers[idx + 1]) / 2.0);
+    }
+    edges.push(vmax);
+    canonicalize_edges(edges)
+}
+
+fn compute_tree_bin_edges(values: &[f64], targets: &[u8], n_bins: usize) -> Vec<f64> {
+    if values.is_empty() {
+        return vec![0.0, 1.0];
+    }
+
+    let mut pairs = values
+        .iter()
+        .copied()
+        .zip(targets.iter().copied())
+        .collect::<Vec<(f64, u8)>>();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let sorted_values = pairs.iter().map(|(v, _)| *v).collect::<Vec<f64>>();
+    let sorted_targets = pairs.iter().map(|(_, t)| *t).collect::<Vec<u8>>();
+
+    let vmin = sorted_values[0];
+    let vmax = sorted_values[sorted_values.len() - 1];
+    if is_close(vmin, vmax) {
+        return vec![vmin, vmax + 1.0];
+    }
+
+    let mut prefix_events = Vec::with_capacity(sorted_targets.len() + 1);
+    prefix_events.push(0_usize);
+    for target in sorted_targets {
+        let previous = *prefix_events.last().unwrap_or(&0);
+        prefix_events.push(previous + usize::from(target));
+    }
+
+    let mut segments = vec![(0_usize, sorted_values.len())];
+    let mut thresholds: Vec<f64> = Vec::new();
+
+    for _ in 0..n_bins.saturating_sub(1) {
+        let mut best_gain = 0.0_f64;
+        let mut best_segment_idx: Option<usize> = None;
+        let mut best_split_idx: Option<usize> = None;
+
+        for (segment_idx, (start, end)) in segments.iter().copied().enumerate() {
+            let (split_idx, gain) = best_tree_split(&sorted_values, &prefix_events, start, end);
+            if let Some(split) = split_idx {
+                if gain > best_gain {
+                    best_gain = gain;
+                    best_segment_idx = Some(segment_idx);
+                    best_split_idx = Some(split);
+                }
+            }
+        }
+
+        let Some(segment_idx) = best_segment_idx else {
+            break;
+        };
+        let Some(split_idx) = best_split_idx else {
+            break;
+        };
+
+        let (start, end) = segments.remove(segment_idx);
+        let threshold = (sorted_values[split_idx] + sorted_values[split_idx + 1]) / 2.0;
+        thresholds.push(threshold);
+        segments.push((start, split_idx + 1));
+        segments.push((split_idx + 1, end));
+    }
+
+    let mut edges = Vec::with_capacity(thresholds.len() + 2);
+    edges.push(vmin);
+    edges.extend(thresholds);
+    edges.push(vmax);
+    canonicalize_edges(edges)
+}
+
+fn best_tree_split(
+    sorted_values: &[f64],
+    prefix_events: &[usize],
+    start: usize,
+    end: usize,
+) -> (Option<usize>, f64) {
+    let total_count = end.saturating_sub(start);
+    if total_count < 2 {
+        return (None, 0.0);
+    }
+
+    let total_events = prefix_events[end] - prefix_events[start];
+    let parent_impurity = gini_impurity(total_events, total_count);
+
+    let mut best_gain = 0.0_f64;
+    let mut best_split_idx: Option<usize> = None;
+    for split_idx in start..(end - 1) {
+        if is_close(sorted_values[split_idx], sorted_values[split_idx + 1]) {
+            continue;
+        }
+
+        let left_count = split_idx - start + 1;
+        let right_count = total_count - left_count;
+        let left_events = prefix_events[split_idx + 1] - prefix_events[start];
+        let right_events = total_events - left_events;
+
+        let left_impurity = gini_impurity(left_events, left_count);
+        let right_impurity = gini_impurity(right_events, right_count);
+        let child_impurity = (left_count as f64 / total_count as f64) * left_impurity
+            + (right_count as f64 / total_count as f64) * right_impurity;
+        let gain = parent_impurity - child_impurity;
+        if gain > best_gain {
+            best_gain = gain;
+            best_split_idx = Some(split_idx);
+        }
+    }
+
+    (best_split_idx, best_gain)
+}
+
+fn gini_impurity(events: usize, count: usize) -> f64 {
+    if count == 0 {
+        return 0.0;
+    }
+    let p = events as f64 / count as f64;
+    2.0 * p * (1.0 - p)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MonotonicBin {
+    lo: f64,
+    hi: f64,
+    events: f64,
+    count: f64,
+}
+
+fn merge_empty_monotonic_bins(mut bins: Vec<MonotonicBin>) -> Vec<MonotonicBin> {
+    if bins.is_empty() {
+        return vec![MonotonicBin {
+            lo: 0.0,
+            hi: 1.0,
+            events: 0.0,
+            count: 1.0,
+        }];
+    }
+
+    let mut idx = 0_usize;
+    while idx < bins.len() {
+        if bins[idx].count > 0.0 {
+            idx += 1;
+            continue;
+        }
+
+        if bins.len() == 1 {
+            bins[idx].count = 1.0;
+            break;
+        }
+        if idx == 0 {
+            bins[1].lo = bins[0].lo;
+            bins.remove(0);
+            continue;
+        }
+
+        bins[idx - 1].hi = bins[idx].hi;
+        bins.remove(idx);
+    }
+    bins
+}
+
+fn enforce_monotonic_edges(
+    values: &[f64],
+    targets: &[u8],
+    edges: &[f64],
+    direction: &str,
+) -> Vec<f64> {
+    if edges.len() <= 2 || values.is_empty() {
+        return edges.to_vec();
+    }
+
+    let mut bins = Vec::with_capacity(edges.len().saturating_sub(1));
+    for idx in 0..(edges.len() - 1) {
+        bins.push(MonotonicBin {
+            lo: edges[idx],
+            hi: edges[idx + 1],
+            events: 0.0,
+            count: 0.0,
+        });
+    }
+
+    for (value, target) in values.iter().zip(targets.iter()) {
+        let bin_idx = bin_index(*value, edges);
+        bins[bin_idx].events += f64::from(*target);
+        bins[bin_idx].count += 1.0;
+    }
+
+    bins = merge_empty_monotonic_bins(bins);
+    if bins.len() <= 1 {
+        return vec![bins[0].lo, bins[0].hi];
+    }
+
+    let mut idx = 0_usize;
+    while idx < bins.len() - 1 {
+        let left_rate = bins[idx].events / bins[idx].count;
+        let right_rate = bins[idx + 1].events / bins[idx + 1].count;
+        let violation = if direction == "increasing" {
+            left_rate > right_rate
+        } else {
+            left_rate < right_rate
+        };
+        if !violation {
+            idx += 1;
+            continue;
+        }
+
+        let right = bins.remove(idx + 1);
+        bins[idx].hi = right.hi;
+        bins[idx].events += right.events;
+        bins[idx].count += right.count;
+        idx = idx.saturating_sub(1);
+    }
+
+    let mut out_edges = Vec::with_capacity(bins.len() + 1);
+    out_edges.push(bins[0].lo);
+    for bin in bins {
+        out_edges.push(bin.hi);
+    }
+    if out_edges.len() < 2 {
+        return vec![out_edges[0], out_edges[0] + 1.0];
+    }
+    let last = out_edges.len() - 1;
+    if is_close(out_edges[0], out_edges[last]) {
+        out_edges[last] += 1.0;
+    }
+    out_edges
+}
+
+fn bin_index(value: f64, edges: &[f64]) -> usize {
+    if edges.len() < 2 {
+        return 0;
+    }
+
+    let last_bin = edges.len() - 2;
+    if value <= edges[0] {
+        return 0;
+    }
+    if value >= edges[edges.len() - 1] {
+        return last_bin;
+    }
+
+    let idx = edges.partition_point(|edge| *edge <= value);
+    idx.saturating_sub(1).min(last_bin)
+}
+
+fn bin_label(value: f64, edges: &[f64]) -> String {
+    format!("bin_{}", bin_index(value, edges))
+}
+
 fn compute_feature_iv_stats(
     feature: &str,
     stats: &[CategoryStats],
@@ -1254,5 +2171,139 @@ mod tests {
             .expect("class iv analysis should work");
         assert_eq!(rows_c0.len(), feature_names.len());
         assert!(rows_c0.iter().all(|r| r.iv >= 0.0));
+    }
+
+    #[test]
+    fn preprocessor_core_reduces_categories_and_preserves_missing() {
+        let rows = vec![
+            vec!["A".to_string()],
+            vec!["A".to_string()],
+            vec!["A".to_string()],
+            vec!["B".to_string()],
+            vec!["B".to_string()],
+            vec!["C".to_string()],
+            vec!["__missing__".to_string()],
+        ];
+        let feature_names = vec!["cat".to_string()];
+        let mut pre = PreprocessorCore::new(
+            Some(2),
+            0.9,
+            2,
+            "__other__".to_string(),
+            "__missing__".to_string(),
+        )
+        .expect("preprocessor should initialize");
+
+        pre.fit(&rows, &feature_names, &[0])
+            .expect("preprocessor fit should work");
+        let out = pre.transform(&rows).expect("transform should work");
+        let values = out.iter().map(|r| r[0].as_str()).collect::<Vec<_>>();
+
+        assert_eq!(values.iter().filter(|&&v| v == "A").count(), 3);
+        assert_eq!(values.iter().filter(|&&v| v == "B").count(), 0);
+        assert!(values.contains(&"__missing__"));
+        assert!(values.contains(&"__other__"));
+    }
+
+    #[test]
+    fn preprocessor_core_unknown_maps_to_other() {
+        let rows = vec![vec!["A".to_string()], vec!["B".to_string()]];
+        let feature_names = vec!["cat".to_string()];
+        let mut pre = PreprocessorCore::new(
+            None,
+            1.0,
+            1,
+            "__other__".to_string(),
+            "__missing__".to_string(),
+        )
+        .expect("preprocessor should initialize");
+        pre.fit(&rows, &feature_names, &[0])
+            .expect("fit should work");
+
+        let pred_rows = vec![vec!["A".to_string()], vec!["Z".to_string()]];
+        let out = pre.transform(&pred_rows).expect("transform should work");
+        assert_eq!(out[0][0], "A");
+        assert_eq!(out[1][0], "__other__");
+    }
+
+    #[test]
+    fn numeric_binner_core_quantile_binning_and_missing_work() {
+        let rows = vec![
+            vec!["1.0".to_string()],
+            vec!["2.0".to_string()],
+            vec!["3.0".to_string()],
+            vec!["4.0".to_string()],
+            vec!["5.0".to_string()],
+            vec!["bad".to_string()],
+        ];
+        let feature_names = vec!["num".to_string()];
+
+        let mut binner = NumericBinnerCore::new(3, "quantile", "__missing__".to_string())
+            .expect("numeric binner should initialize");
+        binner
+            .fit(&rows, &feature_names, &[0], None, None)
+            .expect("numeric fit should work");
+        let out = binner
+            .transform(&rows)
+            .expect("numeric transform should work");
+
+        assert!(out[0][0].starts_with("bin_"));
+        assert_eq!(out[5][0], "__missing__");
+        let summary = binner.summary_rows().expect("summary should be available");
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].feature, "num");
+    }
+
+    #[test]
+    fn numeric_binner_core_enforces_monotonic_increasing() {
+        let rows = vec![
+            vec!["1.0".to_string()],
+            vec!["2.0".to_string()],
+            vec!["3.0".to_string()],
+            vec!["4.0".to_string()],
+            vec!["5.0".to_string()],
+            vec!["6.0".to_string()],
+            vec!["7.0".to_string()],
+            vec!["8.0".to_string()],
+        ];
+        let targets = vec![0, 0, 1, 1, 0, 0, 1, 1];
+        let feature_names = vec!["num".to_string()];
+        let monotonic = vec![(0_usize, "increasing".to_string())];
+
+        let mut binner = NumericBinnerCore::new(4, "quantile", "__missing__".to_string())
+            .expect("numeric binner should initialize");
+        let transformed = binner
+            .fit_transform(
+                &rows,
+                &feature_names,
+                &[0],
+                Some(&targets),
+                Some(&monotonic),
+            )
+            .expect("fit_transform should work");
+
+        let mut rates: HashMap<usize, (usize, usize)> = HashMap::new();
+        for (row, target) in transformed.iter().zip(targets.iter()) {
+            let bin_idx = row[0]
+                .strip_prefix("bin_")
+                .expect("bin prefix should be present")
+                .parse::<usize>()
+                .expect("bin index should be parseable");
+            let entry = rates.entry(bin_idx).or_insert((0, 0));
+            entry.0 += usize::from(*target);
+            entry.1 += 1;
+        }
+
+        let mut sorted_bins = rates.into_iter().collect::<Vec<(usize, (usize, usize))>>();
+        sorted_bins.sort_by(|a, b| a.0.cmp(&b.0));
+        let event_rates = sorted_bins
+            .iter()
+            .map(|(_, (events, count))| *events as f64 / *count as f64)
+            .collect::<Vec<f64>>();
+
+        assert!(!event_rates.is_empty());
+        for idx in 0..event_rates.len().saturating_sub(1) {
+            assert!(event_rates[idx] <= event_rates[idx + 1]);
+        }
     }
 }
