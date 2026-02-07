@@ -158,7 +158,7 @@ def test_preprocessor_numeric_faiss_binning_optional() -> None:
 
 
 def test_preprocessor_numeric_faiss_binning_executes_when_faiss_available() -> None:
-    pytest.importorskip("faiss")
+    pytest.importorskip("faiss", exc_type=ImportError)
     rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
     pre = WoePreprocessor(n_bins=3, binning_method="faiss")
     out = pre.fit_transform(rows, numerical_features=[0])

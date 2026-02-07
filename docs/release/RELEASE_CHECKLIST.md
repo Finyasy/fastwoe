@@ -45,3 +45,5 @@ This checklist implements Phase 5 (Packaging and Release) from
 ## 6) Publish Readiness
 - Tag release (`vX.Y.Z`) only when all gates pass.
 - Publish wheels from CI artifacts or release pipeline.
+- Validate release performance on a real credit-scoring dataset:
+  `python tools/benchmark_real_dataset.py --input-csv /path/to/credit.csv --target-col <target> --methods kmeans tree --threshold kmeans:<pre_ms>:<e2e_ms> --threshold tree:<pre_ms>:<e2e_ms>`

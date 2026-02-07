@@ -5,12 +5,19 @@ Cargo.lock
 
 # Python / tooling
 .venv/
+.venv-ci-local/
+.venv-wheel-smoke/
 __pycache__/
 *.pyc
 *.so
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+dist/
+benchmark-artifacts/
 
 # macOS
 .DS_Store
+
+# Bench artifacts
+crates/fastwoe-core/target/

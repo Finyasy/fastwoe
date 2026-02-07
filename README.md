@@ -267,6 +267,8 @@ proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
   `python tools/check_preprocessor_memory_thresholds.py --report benchmark-artifacts/PREPROCESSOR_MEMORY_BENCHMARK.md --threshold kmeans:10000:150:190 --threshold tree:10000:150:190`
 - Validate FAISS memory soft regression ratios (scheduled benchmark scope):
   `python tools/check_faiss_memory_regression.py --report docs/performance/PREPROCESSOR_MEMORY_BENCHMARK.md --sizes 10000 100000 --max-pre-delta-ratio 1.5 --max-e2e-delta-ratio 1.5`
+- Validate on your real credit-scoring CSV:
+  `python tools/benchmark_real_dataset.py --input-csv /path/to/credit.csv --target-col default_flag --methods kmeans tree --threshold kmeans:500:900 --threshold tree:500:900 --output benchmark-artifacts/`
 - Release profile is tuned for runtime speed (`lto=fat`, `codegen-units=1`, stripped symbols).
 
 Latest FAISS decision snapshot (`docs/performance/FAISS_DECISION_BENCHMARK.md`):
