@@ -1,5 +1,6 @@
 use fastwoe_core::{
-    compute_binary_woe, BinaryTabularWoeModel, MulticlassTabularWoeModel, PredictionCi,
+    compute_binary_woe, BinaryTabularWoeModel, MulticlassTabularWoeModel, NumericBinnerCore,
+    PredictionCi, PreprocessorCore, PreprocessorSummaryRow,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -34,6 +35,148 @@ pub struct IvRow {
     pub iv_ci_upper: f64,
     #[pyo3(get)]
     pub iv_significance: String,
+}
+
+#[pyclass]
+#[derive(Debug)]
+pub struct ReductionSummaryRow {
+    #[pyo3(get)]
+    pub feature: String,
+    #[pyo3(get)]
+    pub original_unique: usize,
+    #[pyo3(get)]
+    pub reduced_unique: usize,
+    #[pyo3(get)]
+    pub coverage: f64,
+}
+
+#[pyclass]
+#[derive(Debug)]
+pub struct RustPreprocessor {
+    inner: PreprocessorCore,
+}
+
+#[pymethods]
+impl RustPreprocessor {
+    #[new]
+    #[pyo3(signature = (max_categories=None, top_p=1.0, min_count=1, other_token="__other__".to_string(), missing_token="__missing__".to_string()))]
+    fn new(
+        max_categories: Option<usize>,
+        top_p: f64,
+        min_count: usize,
+        other_token: String,
+        missing_token: String,
+    ) -> PyResult<Self> {
+        let inner =
+            PreprocessorCore::new(max_categories, top_p, min_count, other_token, missing_token)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    fn fit(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        feature_names: Vec<String>,
+        cat_feature_indices: Vec<usize>,
+    ) -> PyResult<()> {
+        self.inner
+            .fit(&rows, &feature_names, &cat_feature_indices)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn transform(&self, rows: Vec<Vec<String>>) -> PyResult<Vec<Vec<String>>> {
+        self.inner
+            .transform(&rows)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn fit_transform(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        feature_names: Vec<String>,
+        cat_feature_indices: Vec<usize>,
+    ) -> PyResult<Vec<Vec<String>>> {
+        self.inner
+            .fit_transform(&rows, &feature_names, &cat_feature_indices)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn get_reduction_summary(&self) -> PyResult<Vec<ReductionSummaryRow>> {
+        self.inner
+            .summary_rows()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map(to_reduction_rows)
+    }
+}
+
+#[pyclass]
+#[derive(Debug)]
+pub struct RustNumericBinner {
+    inner: NumericBinnerCore,
+}
+
+#[pymethods]
+impl RustNumericBinner {
+    #[new]
+    #[pyo3(signature = (n_bins=5, binning_method="quantile".to_string(), missing_token="__missing__".to_string()))]
+    fn new(n_bins: usize, binning_method: String, missing_token: String) -> PyResult<Self> {
+        let inner = NumericBinnerCore::new(n_bins, &binning_method, missing_token)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (rows, feature_names, numeric_feature_indices, targets=None, monotonic_directions=None))]
+    fn fit(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        feature_names: Vec<String>,
+        numeric_feature_indices: Vec<usize>,
+        targets: Option<Vec<u8>>,
+        monotonic_directions: Option<Vec<(usize, String)>>,
+    ) -> PyResult<()> {
+        self.inner
+            .fit(
+                &rows,
+                &feature_names,
+                &numeric_feature_indices,
+                targets.as_deref(),
+                monotonic_directions.as_deref(),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn transform(&self, rows: Vec<Vec<String>>) -> PyResult<Vec<Vec<String>>> {
+        self.inner
+            .transform(&rows)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (rows, feature_names, numeric_feature_indices, targets=None, monotonic_directions=None))]
+    fn fit_transform(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        feature_names: Vec<String>,
+        numeric_feature_indices: Vec<usize>,
+        targets: Option<Vec<u8>>,
+        monotonic_directions: Option<Vec<(usize, String)>>,
+    ) -> PyResult<Vec<Vec<String>>> {
+        self.inner
+            .fit_transform(
+                &rows,
+                &feature_names,
+                &numeric_feature_indices,
+                targets.as_deref(),
+                monotonic_directions.as_deref(),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    fn get_reduction_summary(&self) -> PyResult<Vec<ReductionSummaryRow>> {
+        self.inner
+            .summary_rows()
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map(to_reduction_rows)
+    }
 }
 
 #[pyclass]
@@ -425,8 +568,11 @@ fn compute_binary_woe_py(
 #[pymodule]
 fn fastwoe_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FastWoe>()?;
+    m.add_class::<RustPreprocessor>()?;
+    m.add_class::<RustNumericBinner>()?;
     m.add_class::<WoeRow>()?;
     m.add_class::<IvRow>()?;
+    m.add_class::<ReductionSummaryRow>()?;
     m.add_function(wrap_pyfunction!(compute_binary_woe_py, m)?)?;
     Ok(())
 }
@@ -471,4 +617,16 @@ fn to_iv_row(value: fastwoe_core::IvFeatureStats) -> IvRow {
         iv_ci_upper: value.iv_ci_upper,
         iv_significance: value.iv_significance,
     }
+}
+
+fn to_reduction_rows(values: &[PreprocessorSummaryRow]) -> Vec<ReductionSummaryRow> {
+    values
+        .iter()
+        .map(|row| ReductionSummaryRow {
+            feature: row.feature.clone(),
+            original_unique: row.original_unique,
+            reduced_unique: row.reduced_unique,
+            coverage: row.coverage,
+        })
+        .collect()
 }
