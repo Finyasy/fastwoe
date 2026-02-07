@@ -26,6 +26,9 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.11",
 ]
+faiss = [
+    "faiss-cpu>=1.8; platform_system == 'Linux'",
+]
 
 [tool.maturin]
 manifest-path = "crates/fastwoe-py/Cargo.toml"
