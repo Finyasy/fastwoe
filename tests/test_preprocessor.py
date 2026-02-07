@@ -8,6 +8,17 @@ fastwoe_mod = pytest.importorskip("fastwoe")
 WoePreprocessor = fastwoe_mod.WoePreprocessor
 
 
+def test_rust_backends_are_available_when_extension_is_installed() -> None:
+    assert fastwoe_mod.RustPreprocessor is not None
+    assert fastwoe_mod.RustNumericBinner is not None
+
+
+def test_preprocessor_initializes_rust_backends_for_quantile_binning() -> None:
+    pre = WoePreprocessor(n_bins=3, binning_method="quantile")
+    assert pre._rust_backend is not None  # noqa: SLF001
+    assert pre._rust_numeric_backend is not None  # noqa: SLF001
+
+
 def test_preprocessor_reduces_high_cardinality_and_groups_rare_values() -> None:
     rows = [["A"], ["A"], ["A"], ["B"], ["B"], ["C"], ["D"], ["E"], [None]]
     pre = WoePreprocessor(top_p=0.9, min_count=2, other_token="__other__")
