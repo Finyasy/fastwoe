@@ -165,6 +165,21 @@ pre = WoePreprocessor(n_bins=2, binning_method="tree")
 rows_binned = pre.fit_transform(rows, numerical_features=[0], target=y)
 ```
 
+You can also enforce monotonic event-rate bins on numerical features:
+```python
+from fastwoe import WoePreprocessor
+
+rows = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]
+y = [0, 0, 1, 1, 1, 1]
+pre = WoePreprocessor(n_bins=4, binning_method="quantile")
+rows_binned = pre.fit_transform(
+    rows,
+    numerical_features=[0],
+    target=y,
+    monotonic_constraints="increasing",
+)
+```
+
 ## Pandas Output Mode
 ```python
 import pandas as pd

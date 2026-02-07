@@ -28,6 +28,8 @@ class WoePreprocessor:
     - max_categories: hard cap on kept categories per feature.
     - top_p: keep categories until cumulative frequency reaches this ratio.
     - min_count: categories below this count are grouped as other.
+    - n_bins: number of bins for numeric features.
+    - binning_method: one of {'quantile', 'uniform', 'tree'}.
     - other_token: replacement token for grouped categories.
     - missing_token: canonical token for missing values.
     """
@@ -76,6 +78,7 @@ class WoePreprocessor:
         cat_features: Any = None,
         numerical_features: Any = None,
         target: Any = None,
+        monotonic_constraints: Any = None,
     ) -> WoePreprocessor:
         rows, meta = _coerce_rows(X)
         if not rows:
@@ -95,8 +98,12 @@ class WoePreprocessor:
         self._fit_counts.clear()
         self._summary_rows.clear()
 
+        monotonic_map = _resolve_monotonic_constraints(
+            monotonic_constraints, self._feature_names, self._numeric_idxs
+        )
         target_rows = None
-        if self.binning_method == "tree" and self._numeric_idxs:
+        needs_target = (self.binning_method == "tree" and self._numeric_idxs) or bool(monotonic_map)
+        if needs_target:
             target_rows = _coerce_binary_target(target, expected_len=len(rows))
 
         # Learn numeric bin edges first.
@@ -116,6 +123,17 @@ class WoePreprocessor:
                 method=self.binning_method,
                 targets=numeric_targets if target_rows is not None else None,
             )
+            if idx in monotonic_map:
+                if target_rows is None:
+                    raise RuntimeError(
+                        "Internal error: target must be available for monotonic mode."
+                    )
+                edges = _enforce_monotonic_edges(
+                    numeric_values,
+                    numeric_targets,
+                    edges,
+                    direction=monotonic_map[idx],
+                )
             self._numeric_edges[idx] = edges
             unique_non_missing = len(set(numeric_values))
             self._summary_rows.append(
@@ -177,12 +195,14 @@ class WoePreprocessor:
         cat_features: Any = None,
         numerical_features: Any = None,
         target: Any = None,
+        monotonic_constraints: Any = None,
     ) -> Any:
         return self.fit(
             X,
             cat_features=cat_features,
             numerical_features=numerical_features,
             target=target,
+            monotonic_constraints=monotonic_constraints,
         ).transform(X)
 
     def get_reduction_summary(self, as_frame: bool = False) -> Any:
@@ -329,6 +349,61 @@ def _resolve_feature_indices(cat_features: Any, feature_names: list[str]) -> lis
     return list(dict.fromkeys(resolved))
 
 
+def _resolve_monotonic_constraints(
+    monotonic_constraints: Any,
+    feature_names: list[str],
+    numeric_idxs: list[int],
+) -> dict[int, str]:
+    if monotonic_constraints is None:
+        return {}
+    if not numeric_idxs:
+        raise ValueError(
+            "monotonic constraints require numerical_features to be selected."
+        )
+
+    if isinstance(monotonic_constraints, str):
+        direction = _normalize_monotonic_direction(monotonic_constraints)
+        return {idx: direction for idx in numeric_idxs}
+
+    if not isinstance(monotonic_constraints, dict):
+        raise TypeError(
+            "monotonic_constraints must be a direction string or a dict of feature -> direction."
+        )
+
+    out: dict[int, str] = {}
+    for feature, direction in monotonic_constraints.items():
+        resolved = _resolve_feature_indices(feature, feature_names)
+        if len(resolved) != 1:
+            raise ValueError(f"Invalid monotonic constraint feature selector: {feature!r}")
+        idx = resolved[0]
+        if idx not in numeric_idxs:
+            raise ValueError(
+                "monotonic constraints can only be applied to selected numerical features."
+            )
+        out[idx] = _normalize_monotonic_direction(direction)
+    return out
+
+
+def _normalize_monotonic_direction(direction: Any) -> str:
+    value = str(direction).strip().lower()
+    aliases = {
+        "increasing": "increasing",
+        "inc": "increasing",
+        "ascending": "increasing",
+        "up": "increasing",
+        "decreasing": "decreasing",
+        "dec": "decreasing",
+        "descending": "decreasing",
+        "down": "decreasing",
+    }
+    if value not in aliases:
+        raise ValueError(
+            "monotonic direction must be one of: "
+            "{'increasing', 'decreasing'} (aliases: inc/dec, ascending/descending)."
+        )
+    return aliases[value]
+
+
 def _coerce_binary_target(target: Any, expected_len: int) -> list[int]:
     if target is None:
         raise ValueError(
@@ -403,17 +478,20 @@ def _compute_bin_edges(
 
 
 def _bin_label(value: float, edges: list[float]) -> str:
+    return f"bin_{_bin_index(value, edges)}"
+
+
+def _bin_index(value: float, edges: list[float]) -> int:
     # Clamp out-of-range values and use binary search for in-range values.
     if len(edges) < 2:
-        return "bin_0"
+        return 0
     last_bin = len(edges) - 2
     if value <= edges[0]:
-        return "bin_0"
+        return 0
     if value >= edges[-1]:
-        return f"bin_{last_bin}"
+        return last_bin
     bin_idx = bisect_right(edges, value) - 1
-    bin_idx = max(0, min(bin_idx, last_bin))
-    return f"bin_{bin_idx}"
+    return max(0, min(bin_idx, last_bin))
 
 
 def _try_float(value: Any) -> float | None:
@@ -481,6 +559,85 @@ def _compute_tree_bin_edges(values: list[float], targets: list[int], n_bins: int
     if math.isclose(unique_edges[0], unique_edges[-1]):
         unique_edges[-1] = unique_edges[-1] + 1.0
     return unique_edges
+
+
+def _enforce_monotonic_edges(
+    values: list[float],
+    targets: list[int],
+    edges: list[float],
+    *,
+    direction: str,
+) -> list[float]:
+    if len(edges) <= 2 or not values:
+        return edges
+
+    bins: list[dict[str, float]] = []
+    for i in range(len(edges) - 1):
+        bins.append(
+            {
+                "lo": float(edges[i]),
+                "hi": float(edges[i + 1]),
+                "events": 0.0,
+                "count": 0.0,
+            }
+        )
+
+    for value, target in zip(values, targets):
+        idx = _bin_index(value, edges)
+        bins[idx]["events"] += float(target)
+        bins[idx]["count"] += 1.0
+
+    bins = _merge_empty_monotonic_bins(bins)
+    if len(bins) <= 1:
+        return [bins[0]["lo"], bins[0]["hi"]]
+
+    i = 0
+    while i < len(bins) - 1:
+        left_rate = bins[i]["events"] / bins[i]["count"]
+        right_rate = bins[i + 1]["events"] / bins[i + 1]["count"]
+        violation = (
+            left_rate > right_rate if direction == "increasing" else left_rate < right_rate
+        )
+        if not violation:
+            i += 1
+            continue
+
+        bins[i]["hi"] = bins[i + 1]["hi"]
+        bins[i]["events"] += bins[i + 1]["events"]
+        bins[i]["count"] += bins[i + 1]["count"]
+        del bins[i + 1]
+        if i > 0:
+            i -= 1
+
+    out_edges = [bins[0]["lo"]]
+    out_edges.extend(b["hi"] for b in bins)
+    unique_edges = [float(v) for v in out_edges]
+    if len(unique_edges) < 2:
+        unique_edges = [unique_edges[0], unique_edges[0] + 1.0]
+    if math.isclose(unique_edges[0], unique_edges[-1]):
+        unique_edges[-1] = unique_edges[-1] + 1.0
+    return unique_edges
+
+
+def _merge_empty_monotonic_bins(bins: list[dict[str, float]]) -> list[dict[str, float]]:
+    if not bins:
+        return [{"lo": 0.0, "hi": 1.0, "events": 0.0, "count": 1.0}]
+
+    i = 0
+    while i < len(bins):
+        if bins[i]["count"] > 0:
+            i += 1
+            continue
+        if len(bins) == 1:
+            bins[i]["count"] = 1.0
+            break
+        if i == 0:
+            bins[1]["lo"] = bins[0]["lo"]
+            del bins[0]
+            continue
+        bins[i - 1]["hi"] = bins[i]["hi"]
+        del bins[i]
+    return bins
 
 
 def _best_tree_split(

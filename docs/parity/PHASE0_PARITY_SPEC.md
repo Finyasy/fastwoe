@@ -19,10 +19,9 @@ Rules:
 ## 2) MVP Release Cut
 Chosen MVP cut: `binary + multiclass + confidence intervals` (already implemented).
 
-Out of MVP:
-- IV/WOE standard-error analytics endpoints.
-- Numerical binning methods (`kbins`, tree, FAISS path).
-- Monotonic constraints and high-cardinality preprocessor parity.
+Out of MVP (remaining):
+- Optional FAISS-style numerical binning path.
+- Full Rust-core parity for monotonic constraints and high-cardinality preprocessor logic.
 
 ## 3) Numeric Tolerances
 Default tolerances for parity tests:

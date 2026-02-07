@@ -160,6 +160,7 @@ Project is considered actualized when all conditions are met:
 - Parity mode and MVP scope were formalized in `docs/parity/PHASE0_PARITY_SPEC.md`.
 - Benchmark dataset/threshold baseline is documented in `docs/performance/BENCHMARK_DATASETS_AND_THRESHOLDS.md`.
 - Phase 4 advanced-feature progress includes supervised `tree` numerical binning in `WoePreprocessor` for binary targets.
+- Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
 
 ## 13) Developer setup (maturin + PyO3 extension)

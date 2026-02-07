@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 import pytest
 
 fastwoe_mod = pytest.importorskip("fastwoe")
@@ -156,3 +158,72 @@ def test_preprocessor_numeric_binning_clamps_out_of_range_values() -> None:
     out = pre.transform([[-10.0], [100.0]])
     assert out[0][0] == "bin_0"
     assert out[1][0] == "bin_1"
+
+
+def test_preprocessor_monotonic_constraints_require_numerical_features() -> None:
+    rows = [["A"], ["B"], ["C"]]
+    pre = WoePreprocessor()
+    with pytest.raises(ValueError, match="numerical_features"):
+        pre.fit(rows, monotonic_constraints="increasing")
+
+
+def test_preprocessor_monotonic_constraints_require_target() -> None:
+    rows = [[1.0], [2.0], [3.0], [4.0]]
+    pre = WoePreprocessor(n_bins=4, binning_method="quantile")
+    with pytest.raises(ValueError, match="target is required"):
+        pre.fit(rows, numerical_features=[0], monotonic_constraints="increasing")
+
+
+def test_preprocessor_monotonic_constraints_reject_non_numeric_feature() -> None:
+    rows = [[1.0, "A"], [2.0, "B"], [3.0, "C"], [4.0, "D"]]
+    target = [0, 1, 0, 1]
+    pre = WoePreprocessor(n_bins=2, binning_method="quantile")
+    with pytest.raises(ValueError, match="numerical features"):
+        pre.fit(
+            rows,
+            numerical_features=[0],
+            target=target,
+            monotonic_constraints={1: "increasing"},
+        )
+
+
+def test_preprocessor_monotonic_constraints_enforce_increasing_event_rate() -> None:
+    rows = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0], [7.0], [8.0]]
+    target = [0, 0, 1, 1, 0, 0, 1, 1]  # rates by 2-sample bins: [0, 1, 0, 1]
+    pre = WoePreprocessor(n_bins=4, binning_method="quantile")
+    transformed = pre.fit_transform(
+        rows,
+        numerical_features=[0],
+        target=target,
+        monotonic_constraints="increasing",
+    )
+
+    by_bin: dict[int, list[int]] = defaultdict(list)
+    for row, y in zip(transformed, target):
+        bin_idx = int(str(row[0]).split("_")[1])
+        by_bin[bin_idx].append(y)
+
+    rates = [sum(by_bin[i]) / len(by_bin[i]) for i in sorted(by_bin)]
+    assert len(rates) >= 1
+    assert all(rates[i] <= rates[i + 1] for i in range(len(rates) - 1))
+
+
+def test_preprocessor_monotonic_constraints_enforce_decreasing_event_rate() -> None:
+    rows = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0], [7.0], [8.0]]
+    target = [1, 1, 0, 0, 1, 1, 0, 0]  # rates by 2-sample bins: [1, 0, 1, 0]
+    pre = WoePreprocessor(n_bins=4, binning_method="quantile")
+    transformed = pre.fit_transform(
+        rows,
+        numerical_features=[0],
+        target=target,
+        monotonic_constraints="decreasing",
+    )
+
+    by_bin: dict[int, list[int]] = defaultdict(list)
+    for row, y in zip(transformed, target):
+        bin_idx = int(str(row[0]).split("_")[1])
+        by_bin[bin_idx].append(y)
+
+    rates = [sum(by_bin[i]) / len(by_bin[i]) for i in sorted(by_bin)]
+    assert len(rates) >= 1
+    assert all(rates[i] >= rates[i + 1] for i in range(len(rates) - 1))
