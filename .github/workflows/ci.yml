@@ -47,12 +47,17 @@ jobs:
           .venv/bin/python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist
           .venv/bin/python -m pip install --force-reinstall dist/*.whl
 
+      - name: Verify Rust extension-backed preprocessors are available
+        run: |
+          .venv/bin/python -c "import fastwoe; assert fastwoe.RustPreprocessor is not None; assert fastwoe.RustNumericBinner is not None"
+
       - name: Python test suite
         run: |
           .venv/bin/python -m pytest -q \
             tests/test_phase0_parity_contract.py \
             tests/test_statistical_accuracy.py \
-            tests/test_preprocessor.py
+            tests/test_preprocessor.py \
+            tests/test_invariants.py
 
   benchmark-smoke:
     name: Benchmark Smoke
@@ -65,10 +70,77 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run targeted benchmark smoke
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run targeted benchmark smoke with thresholds
         run: |
+          mkdir -p benchmark-artifacts
+
           cargo bench -p fastwoe-core --bench woe_simulation -- \
-            binary_transform/transform_matrix/10000 --sample-size 10
+            binary_transform/transform_matrix/10000 --sample-size 10 \
+            | tee benchmark-artifacts/binary_transform_10000.txt
+          python tools/check_benchmark_thresholds.py \
+            --file benchmark-artifacts/binary_transform_10000.txt \
+            --target binary_transform/transform_matrix/10000 \
+            --min-elems-per-sec 17000000
+
+          cargo bench -p fastwoe-core --bench woe_simulation -- \
+            preprocessor_numeric/transform_quantile/10000 --sample-size 10 \
+            | tee benchmark-artifacts/preprocessor_numeric_quantile_10000.txt
+          python tools/check_benchmark_thresholds.py \
+            --file benchmark-artifacts/preprocessor_numeric_quantile_10000.txt \
+            --target preprocessor_numeric/transform_quantile/10000 \
+            --min-elems-per-sec 8000000
+
+          cargo bench -p fastwoe-core --bench woe_simulation -- \
+            preprocessor_numeric/fit_kmeans/10000 --sample-size 10 \
+            | tee benchmark-artifacts/preprocessor_numeric_fit_kmeans_10000.txt
+          python tools/check_benchmark_thresholds.py \
+            --file benchmark-artifacts/preprocessor_numeric_fit_kmeans_10000.txt \
+            --target preprocessor_numeric/fit_kmeans/10000 \
+            --min-elems-per-sec 12000000
+
+          cargo bench -p fastwoe-core --bench woe_simulation -- \
+            preprocessor_numeric/fit_tree/10000 --sample-size 10 \
+            | tee benchmark-artifacts/preprocessor_numeric_fit_tree_10000.txt
+          python tools/check_benchmark_thresholds.py \
+            --file benchmark-artifacts/preprocessor_numeric_fit_tree_10000.txt \
+            --target preprocessor_numeric/fit_tree/10000 \
+            --min-elems-per-sec 15000000
+
+      - name: Build extension for e2e latency benchmark
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip maturin "numpy<2" "pandas>=1.5"
+          .venv/bin/python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist
+          .venv/bin/python -m pip install --force-reinstall dist/*.whl
+
+      - name: Run e2e latency benchmark thresholds
+        run: |
+          .venv/bin/python tools/benchmark_faiss_decision.py \
+            --methods kmeans tree \
+            --sizes 10000 \
+            --warmup 1 \
+            --repeats 3 \
+            --output benchmark-artifacts/
+          .venv/bin/python tools/check_preprocessor_latency_thresholds.py \
+            --report benchmark-artifacts/FAISS_DECISION_BENCHMARK.md \
+            --threshold kmeans:10000:120:180 \
+            --threshold tree:10000:120:160
+
+      - name: Run e2e memory benchmark thresholds
+        run: |
+          .venv/bin/python tools/benchmark_preprocessor_memory.py \
+            --methods kmeans tree \
+            --sizes 10000 \
+            --output benchmark-artifacts/
+          .venv/bin/python tools/check_preprocessor_memory_thresholds.py \
+            --report benchmark-artifacts/PREPROCESSOR_MEMORY_BENCHMARK.md \
+            --threshold kmeans:10000:150:190 \
+            --threshold tree:10000:150:190
 
   faiss-optional-path:
     name: FAISS Optional Path
