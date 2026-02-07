@@ -449,6 +449,7 @@ pub struct NumericBinnerCore {
     feature_names: Vec<String>,
     numeric_idxs: Vec<usize>,
     numeric_edges: HashMap<usize, Vec<f64>>,
+    numeric_labels: HashMap<usize, Vec<String>>,
     summary_rows: Vec<PreprocessorSummaryRow>,
 }
 
@@ -466,6 +467,7 @@ impl NumericBinnerCore {
             feature_names: Vec::new(),
             numeric_idxs: Vec::new(),
             numeric_edges: HashMap::new(),
+            numeric_labels: HashMap::new(),
             summary_rows: Vec::new(),
         })
     }
@@ -507,16 +509,29 @@ impl NumericBinnerCore {
         self.feature_names = feature_names.to_vec();
         self.numeric_idxs = numeric_unique;
         self.numeric_edges.clear();
+        self.numeric_labels.clear();
         self.summary_rows.clear();
         self.summary_rows.reserve(self.numeric_idxs.len());
 
         for &idx in &self.numeric_idxs {
-            let mut numeric_values: Vec<f64> = Vec::new();
-            let mut numeric_targets: Vec<u8> = Vec::new();
+            let collect_targets = matches!(self.method, NumericBinningMethod::Tree)
+                || monotonic_map.contains_key(&idx);
+            let target_values = if collect_targets {
+                Some(targets.ok_or(WoeError::MissingTargetForBinning)?)
+            } else {
+                None
+            };
+
+            let mut numeric_values: Vec<f64> = Vec::with_capacity(rows.len());
+            let mut numeric_targets: Vec<u8> = if collect_targets {
+                Vec::with_capacity(rows.len())
+            } else {
+                Vec::new()
+            };
             for (row_idx, row) in rows.iter().enumerate() {
                 if let Some(value) = row[idx] {
                     numeric_values.push(value);
-                    if let Some(target_values) = targets {
+                    if let Some(target_values) = target_values {
                         numeric_targets.push(target_values[row_idx]);
                     }
                 }
@@ -545,10 +560,12 @@ impl NumericBinnerCore {
                     return Err(WoeError::LengthMismatch);
                 }
                 edges =
-                    enforce_monotonic_edges(&numeric_values, &numeric_targets, &edges, direction);
+                    enforce_monotonic_edges(&numeric_values, &numeric_targets, &edges, *direction);
             }
 
             self.numeric_edges.insert(idx, edges.clone());
+            self.numeric_labels
+                .insert(idx, build_bin_labels(edges.len().saturating_sub(1)));
             let unique_non_missing = count_unique_floats(&numeric_values);
             self.summary_rows.push(PreprocessorSummaryRow {
                 feature: self.feature_names[idx].clone(),
@@ -583,8 +600,13 @@ impl NumericBinnerCore {
             let mut out_row = vec![self.missing_token.clone(); row.len()];
             for &idx in &self.numeric_idxs {
                 let edges = self.numeric_edges.get(&idx).ok_or(WoeError::NotFitted)?;
+                let labels = self.numeric_labels.get(&idx).ok_or(WoeError::NotFitted)?;
                 out_row[idx] = if let Some(value) = row[idx] {
-                    bin_label(value, edges)
+                    let label_idx = bin_index(value, edges);
+                    labels
+                        .get(label_idx)
+                        .cloned()
+                        .unwrap_or_else(|| format!("bin_{label_idx}"))
                 } else {
                     self.missing_token.clone()
                 };
@@ -1275,7 +1297,7 @@ fn sorted_counts_by_freq_then_key(counts: &HashMap<String, usize>) -> Vec<(Strin
 fn parse_monotonic_map(
     monotonic_constraints: Option<&[(usize, String)]>,
     numeric_idxs: &[usize],
-) -> Result<HashMap<usize, String>, WoeError> {
+) -> Result<HashMap<usize, MonotonicDirection>, WoeError> {
     let numeric_set = numeric_idxs.iter().copied().collect::<HashSet<usize>>();
     let mut out = HashMap::new();
     if let Some(constraints) = monotonic_constraints {
@@ -1289,22 +1311,30 @@ fn parse_monotonic_map(
     Ok(out)
 }
 
-fn normalize_monotonic_direction(direction: &str) -> Result<String, WoeError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonotonicDirection {
+    Increasing,
+    Decreasing,
+}
+
+fn normalize_monotonic_direction(direction: &str) -> Result<MonotonicDirection, WoeError> {
     match direction.trim().to_ascii_lowercase().as_str() {
-        "increasing" | "inc" | "ascending" | "up" => Ok("increasing".to_string()),
-        "decreasing" | "dec" | "descending" | "down" => Ok("decreasing".to_string()),
+        "increasing" | "inc" | "ascending" | "up" => Ok(MonotonicDirection::Increasing),
+        "decreasing" | "dec" | "descending" | "down" => Ok(MonotonicDirection::Decreasing),
         other => Err(WoeError::InvalidMonotonicDirection(other.to_string())),
     }
 }
 
 fn count_unique_floats(values: &[f64]) -> usize {
-    if values.is_empty() {
-        return 0;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    sorted.dedup_by(|a, b| *a == *b);
-    sorted.len()
+    values
+        .iter()
+        .map(|value| value.to_bits())
+        .collect::<HashSet<u64>>()
+        .len()
+}
+
+fn build_bin_labels(n_bins: usize) -> Vec<String> {
+    (0..n_bins).map(|idx| format!("bin_{idx}")).collect()
 }
 
 fn is_close(a: f64, b: f64) -> bool {
@@ -1392,6 +1422,19 @@ fn vector_allclose(left: &[f64], right: &[f64], atol: f64) -> bool {
             .all(|(l, r)| (*l - *r).abs() <= atol)
 }
 
+fn count_unique_sorted(sorted_values: &[f64]) -> usize {
+    if sorted_values.is_empty() {
+        return 0;
+    }
+    let mut count = 1usize;
+    for idx in 1..sorted_values.len() {
+        if !is_close(sorted_values[idx - 1], sorted_values[idx]) {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn compute_kmeans_bin_edges(values: &[f64], n_bins: usize, max_iter: usize) -> Vec<f64> {
     if values.is_empty() {
         return vec![0.0, 1.0];
@@ -1405,9 +1448,8 @@ fn compute_kmeans_bin_edges(values: &[f64], n_bins: usize, max_iter: usize) -> V
         return vec![vmin, vmax + 1.0];
     }
 
-    let mut unique_values = sorted_values.clone();
-    unique_values.dedup_by(|a, b| *a == *b);
-    let mut k = n_bins.min(unique_values.len());
+    let unique_count = count_unique_sorted(&sorted_values);
+    let mut k = n_bins.min(unique_count);
     if k <= 1 {
         return vec![vmin, vmax];
     }
@@ -1424,37 +1466,42 @@ fn compute_kmeans_bin_edges(values: &[f64], n_bins: usize, max_iter: usize) -> V
     }
 
     k = centers.len();
-    for _ in 0..max_iter {
-        let mut sums = vec![0.0_f64; k];
-        let mut counts = vec![0_usize; k];
+    let mut boundaries = vec![0.0_f64; k.saturating_sub(1)];
+    let mut sums = vec![0.0_f64; k];
+    let mut counts = vec![0_usize; k];
+    let mut new_centers = vec![0.0_f64; k];
 
-        for value in values {
-            let mut best_idx = 0_usize;
-            let mut best_dist = (value - centers[0]).abs();
-            for (center_idx, center_value) in centers.iter().enumerate().skip(1) {
-                let dist = (value - center_value).abs();
-                if dist < best_dist {
-                    best_idx = center_idx;
-                    best_dist = dist;
-                }
-            }
-            sums[best_idx] += *value;
-            counts[best_idx] += 1;
+    for _ in 0..max_iter {
+        for idx in 0..boundaries.len() {
+            boundaries[idx] = (centers[idx] + centers[idx + 1]) / 2.0;
         }
 
-        let mut new_centers = centers.clone();
-        for center_idx in 0..k {
-            if counts[center_idx] > 0 {
-                new_centers[center_idx] = sums[center_idx] / counts[center_idx] as f64;
+        sums.fill(0.0);
+        counts.fill(0);
+
+        let mut cluster_idx = 0_usize;
+        for value in &sorted_values {
+            while cluster_idx < boundaries.len() && *value > boundaries[cluster_idx] {
+                cluster_idx += 1;
             }
+            sums[cluster_idx] += *value;
+            counts[cluster_idx] += 1;
+        }
+
+        for center_idx in 0..k {
+            new_centers[center_idx] = if counts[center_idx] > 0 {
+                sums[center_idx] / counts[center_idx] as f64
+            } else {
+                centers[center_idx]
+            };
         }
         new_centers.sort_by(|a, b| a.total_cmp(b));
 
         if vector_allclose(&new_centers, &centers, 1e-10) {
-            centers = new_centers;
+            centers.copy_from_slice(&new_centers);
             break;
         }
-        centers = new_centers;
+        centers.copy_from_slice(&new_centers);
     }
 
     centers.sort_by(|a, b| a.total_cmp(b));
@@ -1483,18 +1530,17 @@ fn compute_tree_bin_edges(values: &[f64], targets: &[u8], n_bins: usize) -> Vec<
         .zip(targets.iter().copied())
         .collect::<Vec<(f64, u8)>>();
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let sorted_values = pairs.iter().map(|(v, _)| *v).collect::<Vec<f64>>();
-    let sorted_targets = pairs.iter().map(|(_, t)| *t).collect::<Vec<u8>>();
-
-    let vmin = sorted_values[0];
-    let vmax = sorted_values[sorted_values.len() - 1];
+    let vmin = pairs[0].0;
+    let vmax = pairs[pairs.len() - 1].0;
     if is_close(vmin, vmax) {
         return vec![vmin, vmax + 1.0];
     }
 
-    let mut prefix_events = Vec::with_capacity(sorted_targets.len() + 1);
+    let mut sorted_values = Vec::with_capacity(pairs.len());
+    let mut prefix_events = Vec::with_capacity(pairs.len() + 1);
     prefix_events.push(0_usize);
-    for target in sorted_targets {
+    for (value, target) in pairs {
+        sorted_values.push(value);
         let previous = *prefix_events.last().unwrap_or(&0);
         prefix_events.push(previous + usize::from(target));
     }
@@ -1632,7 +1678,7 @@ fn enforce_monotonic_edges(
     values: &[f64],
     targets: &[u8],
     edges: &[f64],
-    direction: &str,
+    direction: MonotonicDirection,
 ) -> Vec<f64> {
     if edges.len() <= 2 || values.is_empty() {
         return edges.to_vec();
@@ -1663,10 +1709,9 @@ fn enforce_monotonic_edges(
     while idx < bins.len() - 1 {
         let left_rate = bins[idx].events / bins[idx].count;
         let right_rate = bins[idx + 1].events / bins[idx + 1].count;
-        let violation = if direction == "increasing" {
-            left_rate > right_rate
-        } else {
-            left_rate < right_rate
+        let violation = match direction {
+            MonotonicDirection::Increasing => left_rate > right_rate,
+            MonotonicDirection::Decreasing => left_rate < right_rate,
         };
         if !violation {
             idx += 1;
@@ -1710,10 +1755,6 @@ fn bin_index(value: f64, edges: &[f64]) -> usize {
 
     let idx = edges.partition_point(|edge| *edge <= value);
     idx.saturating_sub(1).min(last_bin)
-}
-
-fn bin_label(value: f64, edges: &[f64]) -> String {
-    format!("bin_{}", bin_index(value, edges))
 }
 
 fn compute_feature_iv_stats(
