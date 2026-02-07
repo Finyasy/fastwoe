@@ -101,6 +101,27 @@ def test_preprocessor_numeric_uniform_binning_with_missing() -> None:
     assert any(v.startswith("bin_") for v in labels if v != "__missing__")
 
 
+def test_preprocessor_numeric_binning_accepts_numpy_ndarray_input() -> None:
+    np = pytest.importorskip("numpy")
+    rows = np.array([[0.0], [1.0], [2.0], [np.nan], [3.0]], dtype=float)
+    pre = WoePreprocessor(n_bins=2, binning_method="quantile")
+    out = pre.fit_transform(rows, numerical_features=[0])
+
+    assert out.shape == rows.shape
+    labels = set(out.reshape(-1).tolist())
+    assert labels.issubset({"bin_0", "bin_1", "__missing__"})
+
+
+def test_preprocessor_numeric_binning_accepts_pandas_dataframe_input() -> None:
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame({"num": [0.0, 1.0, 2.0, None, 3.0], "cat": ["A", "B", "C", "D", "E"]})
+    pre = WoePreprocessor(n_bins=2, binning_method="quantile", top_p=0.8, min_count=1)
+    out = pre.fit_transform(df, numerical_features=["num"], cat_features=["cat"])
+
+    assert isinstance(out, pd.DataFrame)
+    assert set(out["num"].tolist()).issubset({"bin_0", "bin_1", "__missing__"})
+
+
 def test_preprocessor_numeric_kmeans_binning() -> None:
     rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
     pre = WoePreprocessor(n_bins=3, binning_method="kmeans")
