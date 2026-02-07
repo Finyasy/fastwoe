@@ -472,7 +472,7 @@ impl NumericBinnerCore {
 
     pub fn fit(
         &mut self,
-        rows: &[Vec<String>],
+        rows: &[Vec<Option<f64>>],
         feature_names: &[String],
         numeric_idxs: &[usize],
         targets: Option<&[u8]>,
@@ -514,7 +514,7 @@ impl NumericBinnerCore {
             let mut numeric_values: Vec<f64> = Vec::new();
             let mut numeric_targets: Vec<u8> = Vec::new();
             for (row_idx, row) in rows.iter().enumerate() {
-                if let Some(value) = try_parse_float(&row[idx]) {
+                if let Some(value) = row[idx] {
                     numeric_values.push(value);
                     if let Some(target_values) = targets {
                         numeric_targets.push(target_values[row_idx]);
@@ -562,7 +562,7 @@ impl NumericBinnerCore {
         Ok(())
     }
 
-    pub fn transform(&self, rows: &[Vec<String>]) -> Result<Vec<Vec<String>>, WoeError> {
+    pub fn transform(&self, rows: &[Vec<Option<f64>>]) -> Result<Vec<Vec<String>>, WoeError> {
         if !self.fitted {
             return Err(WoeError::NotFitted);
         }
@@ -580,10 +580,10 @@ impl NumericBinnerCore {
 
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let mut out_row = row.clone();
+            let mut out_row = vec![self.missing_token.clone(); row.len()];
             for &idx in &self.numeric_idxs {
                 let edges = self.numeric_edges.get(&idx).ok_or(WoeError::NotFitted)?;
-                out_row[idx] = if let Some(value) = try_parse_float(&row[idx]) {
+                out_row[idx] = if let Some(value) = row[idx] {
                     bin_label(value, edges)
                 } else {
                     self.missing_token.clone()
@@ -596,7 +596,7 @@ impl NumericBinnerCore {
 
     pub fn fit_transform(
         &mut self,
-        rows: &[Vec<String>],
+        rows: &[Vec<Option<f64>>],
         feature_names: &[String],
         numeric_idxs: &[usize],
         targets: Option<&[u8]>,
@@ -1207,7 +1207,7 @@ fn validate_binary_targets(targets: &[u8]) -> Result<(), WoeError> {
     Ok(())
 }
 
-fn validate_matrix(rows: &[Vec<String>], expected_rows: Option<usize>) -> Result<usize, WoeError> {
+fn validate_matrix<T>(rows: &[Vec<T>], expected_rows: Option<usize>) -> Result<usize, WoeError> {
     if rows.is_empty() {
         return Err(WoeError::EmptyInput);
     }
@@ -1294,15 +1294,6 @@ fn normalize_monotonic_direction(direction: &str) -> Result<String, WoeError> {
         "increasing" | "inc" | "ascending" | "up" => Ok("increasing".to_string()),
         "decreasing" | "dec" | "descending" | "down" => Ok("decreasing".to_string()),
         other => Err(WoeError::InvalidMonotonicDirection(other.to_string())),
-    }
-}
-
-fn try_parse_float(value: &str) -> Option<f64> {
-    let parsed = value.parse::<f64>().ok()?;
-    if parsed.is_finite() {
-        Some(parsed)
-    } else {
-        None
     }
 }
 
@@ -2229,12 +2220,12 @@ mod tests {
     #[test]
     fn numeric_binner_core_quantile_binning_and_missing_work() {
         let rows = vec![
-            vec!["1.0".to_string()],
-            vec!["2.0".to_string()],
-            vec!["3.0".to_string()],
-            vec!["4.0".to_string()],
-            vec!["5.0".to_string()],
-            vec!["bad".to_string()],
+            vec![Some(1.0)],
+            vec![Some(2.0)],
+            vec![Some(3.0)],
+            vec![Some(4.0)],
+            vec![Some(5.0)],
+            vec![None],
         ];
         let feature_names = vec!["num".to_string()];
 
@@ -2257,14 +2248,14 @@ mod tests {
     #[test]
     fn numeric_binner_core_enforces_monotonic_increasing() {
         let rows = vec![
-            vec!["1.0".to_string()],
-            vec!["2.0".to_string()],
-            vec!["3.0".to_string()],
-            vec!["4.0".to_string()],
-            vec!["5.0".to_string()],
-            vec!["6.0".to_string()],
-            vec!["7.0".to_string()],
-            vec!["8.0".to_string()],
+            vec![Some(1.0)],
+            vec![Some(2.0)],
+            vec![Some(3.0)],
+            vec![Some(4.0)],
+            vec![Some(5.0)],
+            vec![Some(6.0)],
+            vec![Some(7.0)],
+            vec![Some(8.0)],
         ];
         let targets = vec![0, 0, 1, 1, 0, 0, 1, 1];
         let feature_names = vec!["num".to_string()];
