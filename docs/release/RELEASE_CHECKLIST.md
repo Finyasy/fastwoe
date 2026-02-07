@@ -29,6 +29,7 @@ This checklist implements Phase 5 (Packaging and Release) from
 
 ## 5) CI Validation
 - Ensure `CI` workflow is green for push/PR.
+- Ensure the optional `FAISS Optional Path` CI job is green (Linux).
 - Trigger `Wheels` workflow and verify artifacts for Linux/macOS/Windows.
 - Confirm scheduled/manual benchmark workflow runs and uploads artifacts.
 
