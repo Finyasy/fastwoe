@@ -24,11 +24,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Create virtual environment
+        run: python -m venv .venv
+
       - name: Install Python tooling
-        run: python -m pip install --upgrade pip maturin pytest ruff
+        run: .venv/bin/python -m pip install --upgrade pip maturin pytest ruff
 
       - name: Python lint
-        run: python -m ruff check python/fastwoe tests tools docs README.md
+        run: .venv/bin/python -m ruff check python/fastwoe tests tools docs README.md
 
       - name: Rust format check
         run: cargo fmt --all --check
@@ -39,12 +42,14 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace --all-features
 
-      - name: Build and install extension
-        run: python -m maturin develop --release --manifest-path crates/fastwoe-py/Cargo.toml
+      - name: Build and install extension wheel
+        run: |
+          .venv/bin/python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist
+          .venv/bin/python -m pip install --force-reinstall dist/*.whl
 
       - name: Python test suite
         run: |
-          python -m pytest -q \
+          .venv/bin/python -m pytest -q \
             tests/test_phase0_parity_contract.py \
             tests/test_statistical_accuracy.py \
             tests/test_preprocessor.py
@@ -81,11 +86,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python tooling + FAISS
-        run: python -m pip install --upgrade pip maturin pytest '.[faiss]'
+      - name: Create virtual environment
+        run: python -m venv .venv
 
-      - name: Build and install extension
-        run: python -m maturin develop --release --manifest-path crates/fastwoe-py/Cargo.toml
+      - name: Install Python tooling + FAISS
+        run: .venv/bin/python -m pip install --upgrade pip maturin pytest '.[faiss]'
+
+      - name: Build and install extension wheel
+        run: |
+          .venv/bin/python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist
+          .venv/bin/python -m pip install --force-reinstall dist/*.whl
 
       - name: Run FAISS-specific preprocessor test
-        run: python -m pytest -q tests/test_preprocessor.py -k faiss_binning_executes_when_faiss_available
+        run: .venv/bin/python -m pytest -q tests/test_preprocessor.py -k faiss_binning_executes_when_faiss_available
