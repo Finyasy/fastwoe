@@ -168,6 +168,7 @@ Project is considered actualized when all conditions are met:
 - The preprocessor Rust bridge now uses numeric-native marshaling (`Option[f64]`) for numeric features and selected-column marshaling for categorical reduction to reduce string-conversion overhead on NumPy/pandas inputs.
 - Monotonic-constraint edge enforcement for numerical bins now runs in Rust core when the Rust backend is available.
 - Python parity tests now include Rust-vs-Python checks for numeric preprocessor paths (quantile, kmeans, tree, monotonic).
+- Phase 0 fixture parity coverage now includes deterministic preprocessor cases (quantile, kmeans, tree, monotonic) in `tests/fixtures/parity/phase0_v1.json`.
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
 - Deterministic invariant/property-style tests were added for probability bounds, CI validity, and monotonic stability.
