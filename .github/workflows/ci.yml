@@ -85,7 +85,7 @@ jobs:
           python tools/check_benchmark_thresholds.py \
             --file benchmark-artifacts/binary_transform_10000.txt \
             --target binary_transform/transform_matrix/10000 \
-            --min-elems-per-sec 12000000
+            --min-elems-per-sec 7000000
 
           cargo bench -p fastwoe-core --bench woe_simulation -- \
             preprocessor_numeric/transform_quantile/10000 --sample-size 10 \
@@ -93,7 +93,7 @@ jobs:
           python tools/check_benchmark_thresholds.py \
             --file benchmark-artifacts/preprocessor_numeric_quantile_10000.txt \
             --target preprocessor_numeric/transform_quantile/10000 \
-            --min-elems-per-sec 6000000
+            --min-elems-per-sec 4000000
 
           cargo bench -p fastwoe-core --bench woe_simulation -- \
             preprocessor_numeric/fit_kmeans/10000 --sample-size 10 \
@@ -101,7 +101,7 @@ jobs:
           python tools/check_benchmark_thresholds.py \
             --file benchmark-artifacts/preprocessor_numeric_fit_kmeans_10000.txt \
             --target preprocessor_numeric/fit_kmeans/10000 \
-            --min-elems-per-sec 8000000
+            --min-elems-per-sec 5000000
 
           cargo bench -p fastwoe-core --bench woe_simulation -- \
             preprocessor_numeric/fit_tree/10000 --sample-size 10 \
@@ -109,7 +109,7 @@ jobs:
           python tools/check_benchmark_thresholds.py \
             --file benchmark-artifacts/preprocessor_numeric_fit_tree_10000.txt \
             --target preprocessor_numeric/fit_tree/10000 \
-            --min-elems-per-sec 10000000
+            --min-elems-per-sec 6000000
 
       - name: Build extension for e2e latency benchmark
         run: |

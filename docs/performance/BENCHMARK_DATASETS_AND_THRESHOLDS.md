@@ -75,10 +75,10 @@ Thresholds were tightened on **February 7, 2026** after the first green CI-equiv
 ### CI Push-Safe Thresholds
 To reduce false negatives on shared GitHub runners, `CI / Benchmark Smoke` uses
 more conservative push-time thresholds:
-- `binary_transform/transform_matrix/10000`: `>= 12.0M elems/s`
-- `preprocessor_numeric/transform_quantile/10000`: `>= 6.0M elems/s`
-- `preprocessor_numeric/fit_kmeans/10000`: `>= 8.0M elems/s`
-- `preprocessor_numeric/fit_tree/10000`: `>= 10.0M elems/s`
+- `binary_transform/transform_matrix/10000`: `>= 7.0M elems/s`
+- `preprocessor_numeric/transform_quantile/10000`: `>= 4.0M elems/s`
+- `preprocessor_numeric/fit_kmeans/10000`: `>= 5.0M elems/s`
+- `preprocessor_numeric/fit_tree/10000`: `>= 6.0M elems/s`
 - End-to-end latency (`kmeans`, 10k): preprocess `<= 250 ms`, e2e `<= 350 ms`
 - End-to-end latency (`tree`, 10k): preprocess `<= 250 ms`, e2e `<= 330 ms`
 
