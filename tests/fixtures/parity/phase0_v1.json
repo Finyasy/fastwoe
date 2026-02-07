@@ -424,5 +424,323 @@
         0.962810747509048
       ]
     ]
+  },
+  "preprocessor": {
+    "kmeans_numeric": {
+      "fit_kwargs": {
+        "numerical_features": [
+          0
+        ]
+      },
+      "params": {
+        "binning_method": "kmeans",
+        "n_bins": 3
+      },
+      "rows": [
+        [
+          0.0
+        ],
+        [
+          0.2
+        ],
+        [
+          0.3
+        ],
+        [
+          10.0
+        ],
+        [
+          10.1
+        ],
+        [
+          10.3
+        ],
+        [
+          20.0
+        ],
+        [
+          20.1
+        ],
+        [
+          null
+        ]
+      ],
+      "summary": [
+        {
+          "coverage": 1.0,
+          "feature": "feature_0",
+          "original_unique": 8,
+          "reduced_unique": 3
+        }
+      ],
+      "transformed": [
+        [
+          "bin_0"
+        ],
+        [
+          "bin_0"
+        ],
+        [
+          "bin_0"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_2"
+        ],
+        [
+          "bin_2"
+        ],
+        [
+          "__missing__"
+        ]
+      ]
+    },
+    "monotonic_increasing": {
+      "fit_kwargs": {
+        "monotonic_constraints": "increasing",
+        "numerical_features": [
+          0
+        ],
+        "target": [
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          1,
+          1
+        ]
+      },
+      "params": {
+        "binning_method": "quantile",
+        "n_bins": 4
+      },
+      "rows": [
+        [
+          1.0
+        ],
+        [
+          2.0
+        ],
+        [
+          3.0
+        ],
+        [
+          4.0
+        ],
+        [
+          5.0
+        ],
+        [
+          6.0
+        ],
+        [
+          7.0
+        ],
+        [
+          8.0
+        ]
+      ],
+      "summary": [
+        {
+          "coverage": 1.0,
+          "feature": "feature_0",
+          "original_unique": 8,
+          "reduced_unique": 3
+        }
+      ],
+      "transformed": [
+        [
+          "bin_0"
+        ],
+        [
+          "bin_0"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_2"
+        ],
+        [
+          "bin_2"
+        ]
+      ]
+    },
+    "quantile_mixed": {
+      "fit_kwargs": {
+        "cat_features": [
+          1
+        ],
+        "numerical_features": [
+          0
+        ]
+      },
+      "params": {
+        "binning_method": "quantile",
+        "min_count": 1,
+        "n_bins": 3,
+        "top_p": 0.7
+      },
+      "rows": [
+        [
+          1000.0,
+          "A"
+        ],
+        [
+          1100.0,
+          "A"
+        ],
+        [
+          1200.0,
+          "B"
+        ],
+        [
+          1300.0,
+          "C"
+        ],
+        [
+          1400.0,
+          null
+        ],
+        [
+          null,
+          "D"
+        ],
+        [
+          1600.0,
+          "E"
+        ]
+      ],
+      "summary": [
+        {
+          "coverage": 1.0,
+          "feature": "feature_0",
+          "original_unique": 6,
+          "reduced_unique": 3
+        },
+        {
+          "coverage": 0.8571428571428571,
+          "feature": "feature_1",
+          "original_unique": 6,
+          "reduced_unique": 6
+        }
+      ],
+      "transformed": [
+        [
+          "bin_0",
+          "A"
+        ],
+        [
+          "bin_0",
+          "A"
+        ],
+        [
+          "bin_1",
+          "B"
+        ],
+        [
+          "bin_1",
+          "C"
+        ],
+        [
+          "bin_2",
+          "__missing__"
+        ],
+        [
+          "__missing__",
+          "D"
+        ],
+        [
+          "bin_2",
+          "__other__"
+        ]
+      ]
+    },
+    "tree_numeric": {
+      "fit_kwargs": {
+        "numerical_features": [
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ]
+      },
+      "params": {
+        "binning_method": "tree",
+        "n_bins": 2
+      },
+      "rows": [
+        [
+          1.0
+        ],
+        [
+          2.0
+        ],
+        [
+          3.0
+        ],
+        [
+          100.0
+        ],
+        [
+          110.0
+        ],
+        [
+          120.0
+        ]
+      ],
+      "summary": [
+        {
+          "coverage": 1.0,
+          "feature": "feature_0",
+          "original_unique": 6,
+          "reduced_unique": 2
+        }
+      ],
+      "transformed": [
+        [
+          "bin_0"
+        ],
+        [
+          "bin_0"
+        ],
+        [
+          "bin_0"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ],
+        [
+          "bin_1"
+        ]
+      ]
+    }
   }
 }
