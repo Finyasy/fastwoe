@@ -165,6 +165,7 @@ Project is considered actualized when all conditions are met:
 - CI now includes a Linux FAISS optional-path validation job.
 - High-cardinality categorical reduction logic now has a Rust-core (`PreprocessorCore`) path via PyO3.
 - Numerical binning now has a Rust-core path (`NumericBinnerCore`) exposed via PyO3 (`RustNumericBinner`) for `quantile`, `uniform`, `kmeans`, and `tree`.
+- The preprocessor Rust bridge now uses numeric-native marshaling (`Option[f64]`) for numeric features and selected-column marshaling for categorical reduction to reduce string-conversion overhead on NumPy/pandas inputs.
 - Monotonic-constraint edge enforcement for numerical bins now runs in Rust core when the Rust backend is available.
 - Python parity tests now include Rust-vs-Python checks for numeric preprocessor paths (quantile, kmeans, tree, monotonic).
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
