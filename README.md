@@ -24,6 +24,9 @@ This repository is scaffolded as a Rust workspace with PyO3 bindings for Python.
 ## Python Tooling
 Ruff and Python dev settings are configured in `pyproject.toml`.
 
+Optional FAISS path (Linux):
+`python -m pip install '.[faiss]'`
+
 ## Quick Python Usage
 ```python
 from fastwoe import FastWoe
@@ -145,6 +148,9 @@ summary = pre.get_reduction_summary()
 model = FastWoe()
 model.fit_matrix(rows_reduced, [1, 0, 0, 1], feature_names=["merchant", "segment"])
 ```
+
+The categorical reduction path is backed by Rust (`PreprocessorCore`) when the extension is built.
+Numerical binning (`quantile`, `uniform`, `kmeans`, `tree`) is also Rust-backed via `NumericBinnerCore`; the FAISS path remains optional/Python-backed.
 
 Numerical binning is also supported before WOE:
 ```python
