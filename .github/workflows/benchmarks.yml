@@ -27,3 +27,79 @@ jobs:
         with:
           name: benchmark-results
           path: benchmark-artifacts
+
+  faiss-decision-benchmark:
+    name: FAISS Decision Benchmark (Soft Gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install benchmark dependencies
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install "numpy<2" "pandas>=1.5" "faiss-cpu>=1.8" maturin
+
+      - name: Build and install extension wheel
+        run: |
+          .venv/bin/python -m maturin build --release --manifest-path crates/fastwoe-py/Cargo.toml --out dist
+          .venv/bin/python -m pip install --force-reinstall dist/*.whl
+
+      - name: Run FAISS decision benchmark
+        run: |
+          mkdir -p benchmark-artifacts
+          .venv/bin/python tools/benchmark_faiss_decision.py \
+            --methods kmeans tree faiss \
+            --sizes 10000 100000 \
+            --output benchmark-artifacts/
+
+      - name: Run preprocessor memory benchmark
+        run: |
+          .venv/bin/python tools/benchmark_preprocessor_memory.py \
+            --methods kmeans tree faiss \
+            --sizes 10000 100000 \
+            --output benchmark-artifacts/
+
+      - name: Soft regression gate for FAISS path
+        run: |
+          .venv/bin/python tools/check_faiss_regression.py \
+            --report benchmark-artifacts/FAISS_DECISION_BENCHMARK.md \
+            --sizes 10000 100000 \
+            --max-preprocess-ratio 2.0 \
+            --max-e2e-ratio 1.6
+
+      - name: Memory threshold gate
+        run: |
+          .venv/bin/python tools/check_preprocessor_memory_thresholds.py \
+            --report benchmark-artifacts/PREPROCESSOR_MEMORY_BENCHMARK.md \
+            --threshold kmeans:10000:150:190 \
+            --threshold kmeans:100000:180:220 \
+            --threshold tree:10000:150:190 \
+            --threshold tree:100000:180:220 \
+            --threshold faiss:10000:180:220 \
+            --threshold faiss:100000:200:240
+
+      - name: Soft regression gate for FAISS memory path
+        run: |
+          .venv/bin/python tools/check_faiss_memory_regression.py \
+            --report benchmark-artifacts/PREPROCESSOR_MEMORY_BENCHMARK.md \
+            --sizes 10000 100000 \
+            --max-pre-delta-ratio 1.5 \
+            --max-e2e-delta-ratio 1.5
+
+      - name: Upload FAISS benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: faiss-decision-benchmark
+          path: benchmark-artifacts
