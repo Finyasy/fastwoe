@@ -18,6 +18,11 @@ This checklist implements Phase 5 (Packaging and Release) from
 - Run benchmark smoke:
   `cargo bench -p fastwoe-core --bench woe_simulation -- binary_transform/transform_matrix/10000 --sample-size 10`
 - Compare result against `docs/performance/BENCHMARK_DATASETS_AND_THRESHOLDS.md`.
+- Run end-to-end preprocessor latency + memory threshold checks:
+  `python tools/check_preprocessor_latency_thresholds.py ...`
+  `python tools/check_preprocessor_memory_thresholds.py ...`
+- For FAISS benchmark environments, run memory ratio soft gate:
+  `python tools/check_faiss_memory_regression.py ...`
 
 ## 4) Versioning and Changelog
 - Bump version in `pyproject.toml` and workspace package metadata if needed.
@@ -26,12 +31,16 @@ This checklist implements Phase 5 (Packaging and Release) from
 - Breaking changes
 - Migration guidance
 - Known limitations
+- Update `docs/release/MIGRATION_AND_LIMITATIONS.md` for this release.
 
 ## 5) CI Validation
 - Ensure `CI` workflow is green for push/PR.
 - Ensure the optional `FAISS Optional Path` CI job is green (Linux).
 - Trigger `Wheels` workflow and verify artifacts for Linux/macOS/Windows.
+- Confirm wheel smoke tests pass on Linux/macOS/Windows jobs.
 - Confirm scheduled/manual benchmark workflow runs and uploads artifacts.
+- Reproduce CI-critical local flow before release:
+  `bash scripts/repro_ci_local.sh fastwoe-faiss`
 
 ## 6) Publish Readiness
 - Tag release (`vX.Y.Z`) only when all gates pass.
