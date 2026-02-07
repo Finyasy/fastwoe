@@ -320,4 +320,7 @@ Publishing flow (`Wheels`):
 Trusted publishing setup (required once on PyPI/TestPyPI):
 - Repository: `Finyasy/fastwoe`
 - Workflow: `.github/workflows/wheels.yml`
-- Environments: `pypi` and `testpypi`
+
+Optional fallback (if OIDC trusted publishing is not configured yet):
+- Set GitHub secret `PYPI_API_TOKEN` for PyPI publish
+- Set GitHub secret `TEST_PYPI_API_TOKEN` for TestPyPI publish

@@ -52,9 +52,10 @@ This checklist implements Phase 5 (Packaging and Release) from
 - Configure PyPI Trusted Publisher for this repository/workflow:
 - Owner/repo: `Finyasy/fastwoe`
 - Workflow: `.github/workflows/wheels.yml`
-- Environment: `pypi`
-- Configure TestPyPI Trusted Publisher with the same workflow and environment:
-- Environment: `testpypi`
+- Optional API-token fallback:
+- GitHub secret `PYPI_API_TOKEN` (for PyPI)
+- GitHub secret `TEST_PYPI_API_TOKEN` (for TestPyPI)
+- Configure TestPyPI Trusted Publisher with the same repository/workflow when using OIDC.
 
 ## 7) Publish Readiness
 - Tag release (`vX.Y.Z`) only when all gates pass.

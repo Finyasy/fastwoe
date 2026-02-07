@@ -152,9 +152,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/fastwoe-rs/
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -167,7 +164,17 @@ jobs:
           python -m pip install --upgrade pip twine "pkginfo>=1.12.0" "packaging>=24.0"
           python -m twine check dist/*
 
-      - name: Publish to TestPyPI
+      - name: Publish to TestPyPI (API token)
+        if: ${{ secrets.TEST_PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          skip-existing: true
+
+      - name: Publish to TestPyPI (Trusted publishing)
+        if: ${{ secrets.TEST_PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -182,9 +189,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    environment:
-      name: pypi
-      url: https://pypi.org/project/fastwoe-rs/
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -197,7 +201,16 @@ jobs:
           python -m pip install --upgrade pip twine "pkginfo>=1.12.0" "packaging>=24.0"
           python -m twine check dist/*
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI (API token)
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+      - name: Publish to PyPI (Trusted publishing)
+        if: ${{ secrets.PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
