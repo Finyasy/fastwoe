@@ -151,10 +151,10 @@ Project is considered actualized when all conditions are met:
 - Documentation includes migration and known limitations.
 
 ## 11) Immediate Next Actions
-- Keep extension-backed parity checks in CI for the Rust numeric preprocessor path.
-- Decide whether FAISS remains an optional Python path or gets a Rust-core implementation.
-- Expand preprocessing benchmarks (latency + throughput) for quantile/kmeans/tree binning.
-- Complete release hardening (wheel matrix, smoke tests, migration notes).
+- [x] Keep extension-backed parity checks in CI for the Rust numeric preprocessor path.
+- [x] Decide whether FAISS remains an optional Python path or gets a Rust-core implementation.
+- [x] Expand preprocessing benchmarks (latency + throughput) for quantile/kmeans/tree binning.
+- [x] Complete release hardening (wheel matrix, smoke tests, migration notes).
 
 ## 12) Implementation Progress Update
 - Parity mode and MVP scope were formalized in `docs/parity/PHASE0_PARITY_SPEC.md`.
@@ -172,8 +172,34 @@ Project is considered actualized when all conditions are met:
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
 - Deterministic invariant/property-style tests were added for probability bounds, CI validity, and monotonic stability.
+- Performance hardening now includes preprocessor benchmark groups (categorical and numeric) with CI smoke thresholds for numeric quantile transform throughput.
+- CI now verifies Rust extension preprocessor backends are present and includes invariant tests in the quality gate suite.
+- Wheels CI now performs install/import/fit smoke tests on Linux/macOS/Windows before uploading artifacts.
+- Migration and known limitations documentation is now tracked in `docs/release/MIGRATION_AND_LIMITATIONS.md`.
+- FAISS decision benchmarking harness was added at `tools/benchmark_faiss_decision.py`, with current baseline output captured in `docs/performance/FAISS_DECISION_BENCHMARK.md`.
+- FAISS decision is currently to keep FAISS as an optional Python path; measured benchmarks did not justify Rust-core FAISS integration.
+- Scheduled CI now runs a FAISS decision benchmark job with a soft regression gate (`tools/check_faiss_regression.py`) to fail only on major degradation.
+- Rust numeric hot-path optimization improved preprocessor performance (`fit_kmeans`, `transform_quantile`) via reduced allocations and faster 1D k-means assignment.
+- CI benchmark smoke now enforces thresholds for Rust preprocessor `kmeans`/`tree` and Python end-to-end latency thresholds for `kmeans`/`tree`.
+- Local CI-equivalent reproduction is now scripted (`scripts/repro_ci_local.sh`) and validated without pip index fetches when using a prepared conda environment.
+- Benchmark policy now includes end-to-end preprocessor memory deltas with CI threshold checks for `kmeans`/`tree`, plus scheduled `faiss` memory monitoring.
+- Memory thresholds were tightened on February 7, 2026, and scheduled benchmarks now include a FAISS-vs-kmeans memory ratio soft gate (`tools/check_faiss_memory_regression.py`).
 
-## 13) Developer setup (maturin + PyO3 extension)
+## 13) FAISS Decision Outcome (2026-02-07)
+Decision source: `docs/performance/FAISS_DECISION_BENCHMARK.md`
+
+Measured on representative synthetic numeric workloads (`10_000` and `100_000` rows, `4` numeric features, `8` bins):
+- Preprocess best (`10_000`): `kmeans 32.126 ms` vs `faiss 47.869 ms`
+- Preprocess best (`100_000`): `kmeans 453.994 ms` vs `faiss 493.762 ms`
+- End-to-end best (`10_000`): `kmeans 49.710 ms` vs `faiss 58.275 ms`
+- End-to-end best (`100_000`): `kmeans 616.789 ms` vs `faiss 650.255 ms`
+
+Decision:
+- Keep FAISS as an optional Python path.
+- Do not implement Rust-core FAISS yet.
+- Re-evaluate only when FAISS shows at least `20%` preprocess gain and `10%` end-to-end gain against `kmeans` across tested sizes.
+
+## 14) Developer setup (maturin + PyO3 extension)
 
 To build and test the Rust-backed Python extension locally:
 
@@ -226,5 +252,20 @@ PYTHONPATH=python pytest -q tests/
 ### Troubleshooting
 
 - **Missing maturin:** Install as above; ensure the same Python you use for `pytest` has maturin and the developed package.
+- **`python -m maturin` reports `Unable to find maturin script`:** In mixed conda/venv setups, add `$CONDA_PREFIX/bin` to PATH and run `maturin` directly, or use `scripts/repro_ci_local.sh`.
 - **Rust not found:** Install the Rust toolchain (`rustup`) and ensure `cargo` is on your PATH. The project uses `rust-toolchain.toml` (stable).
 - **Parity/stat tests fail:** Ensure you ran `maturin develop --release` (release build). Debug builds are slower and are not the validated configuration.
+
+## 15) Local CI-Equivalent Reproduction (Verified)
+
+Verified on **February 7, 2026** with:
+- release wheel build via maturin
+- wheel install into a local venv
+- `tests/test_phase0_parity_contract.py`, `tests/test_preprocessor.py`, `tests/test_invariants.py`
+- end-to-end latency thresholds for `kmeans` and `tree`
+
+Command:
+
+```bash
+bash scripts/repro_ci_local.sh fastwoe-faiss
+```
