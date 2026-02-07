@@ -161,6 +161,7 @@ Project is considered actualized when all conditions are met:
 - Benchmark dataset/threshold baseline is documented in `docs/performance/BENCHMARK_DATASETS_AND_THRESHOLDS.md`.
 - Phase 4 advanced-feature progress includes supervised `tree` numerical binning in `WoePreprocessor` for binary targets.
 - KBins-style `kmeans` numerical binning was added to `WoePreprocessor`.
+- Optional FAISS-backed numerical binning path was added to `WoePreprocessor` when `faiss` is installed.
 - Baseline monotonic-constraint workflow was added in `WoePreprocessor` for numerical binning.
 - Regression coverage was added for out-of-range numeric bin assignment.
 - Deterministic invariant/property-style tests were added for probability bounds, CI validity, and monotonic stability.

@@ -29,7 +29,7 @@ class WoePreprocessor:
     - top_p: keep categories until cumulative frequency reaches this ratio.
     - min_count: categories below this count are grouped as other.
     - n_bins: number of bins for numeric features.
-    - binning_method: one of {'quantile', 'uniform', 'kmeans', 'tree'}.
+    - binning_method: one of {'quantile', 'uniform', 'kmeans', 'faiss', 'tree'}.
     - other_token: replacement token for grouped categories.
     - missing_token: canonical token for missing values.
     """
@@ -52,9 +52,9 @@ class WoePreprocessor:
             raise ValueError("min_count must be positive.")
         if n_bins <= 1:
             raise ValueError("n_bins must be greater than 1.")
-        if binning_method not in {"quantile", "uniform", "kmeans", "tree"}:
+        if binning_method not in {"quantile", "uniform", "kmeans", "faiss", "tree"}:
             raise ValueError(
-                "binning_method must be one of: {'quantile', 'uniform', 'kmeans', 'tree'}."
+                "binning_method must be one of: {'quantile', 'uniform', 'kmeans', 'faiss', 'tree'}."
             )
 
         self.max_categories = max_categories
@@ -458,6 +458,8 @@ def _compute_bin_edges(
         return _compute_tree_bin_edges(values, targets, n_bins=n_bins)
     if method == "kmeans":
         return _compute_kmeans_bin_edges(values, n_bins=n_bins)
+    if method == "faiss":
+        return _compute_faiss_kmeans_bin_edges(values, n_bins=n_bins)
 
     np = _try_import_numpy()
     if np is None:
@@ -617,6 +619,50 @@ def _compute_kmeans_bin_edges(values: list[float], n_bins: int, max_iter: int = 
     return unique_edges
 
 
+def _compute_faiss_kmeans_bin_edges(
+    values: list[float], n_bins: int, max_iter: int = 50
+) -> list[float]:
+    np = _try_import_numpy()
+    if np is None:
+        raise RuntimeError("numpy is required for faiss numerical binning.")
+
+    faiss = _try_import_faiss()
+    if faiss is None:
+        raise RuntimeError(
+            "faiss is required for binning_method='faiss'. "
+            "Install faiss-cpu or use binning_method='kmeans'."
+        )
+
+    arr = np.array(values, dtype="float32")
+    vmin = float(np.min(arr))
+    vmax = float(np.max(arr))
+    if math.isclose(vmin, vmax):
+        return [vmin, vmax + 1.0]
+
+    unique_values = np.unique(arr)
+    k = int(min(n_bins, unique_values.size))
+    if k <= 1:
+        return [vmin, vmax]
+
+    train_x = np.ascontiguousarray(arr.reshape(-1, 1), dtype="float32")
+    kmeans = faiss.Kmeans(d=1, k=k, niter=max_iter, verbose=False, seed=42)
+    kmeans.train(train_x)
+    centroids = np.ascontiguousarray(kmeans.centroids.reshape(-1), dtype="float32")
+    centers = np.array(sorted(set(float(c) for c in centroids.tolist())), dtype=float)
+
+    if centers.size < 2:
+        return [vmin, vmax]
+
+    midpoints = (centers[:-1] + centers[1:]) / 2.0
+    edges = [vmin, *[float(v) for v in midpoints], vmax]
+    unique_edges = sorted(set(float(v) for v in edges))
+    if len(unique_edges) < 2:
+        unique_edges = [vmin, vmax]
+    if math.isclose(unique_edges[0], unique_edges[-1]):
+        unique_edges[-1] = unique_edges[-1] + 1.0
+    return unique_edges
+
+
 def _enforce_monotonic_edges(
     values: list[float],
     targets: list[int],
@@ -754,5 +800,13 @@ def _try_import_pandas() -> ModuleType | None:
 def _try_import_numpy() -> ModuleType | None:
     try:
         return import_module("numpy")
+    except ImportError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _try_import_faiss() -> ModuleType | None:
+    try:
+        return import_module("faiss")
     except ImportError:
         return None

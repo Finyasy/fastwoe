@@ -20,7 +20,7 @@ Rules:
 Chosen MVP cut: `binary + multiclass + confidence intervals` (already implemented).
 
 Out of MVP (remaining):
-- Optional FAISS-style numerical binning path.
+- Production FAISS packaging/CI support across platforms (optional milestone).
 - Full Rust-core parity for monotonic constraints and high-cardinality preprocessor logic.
 
 ## 3) Numeric Tolerances

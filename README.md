@@ -164,6 +164,15 @@ pre = WoePreprocessor(n_bins=3, binning_method="kmeans")
 rows_binned = pre.fit_transform(rows, numerical_features=[0])
 ```
 
+Optional FAISS-backed 1D k-means binning is available when `faiss` is installed:
+```python
+from fastwoe import WoePreprocessor
+
+rows = [[0.1], [0.2], [0.3], [10.0], [10.2], [20.0]]
+pre = WoePreprocessor(n_bins=3, binning_method="faiss")
+rows_binned = pre.fit_transform(rows, numerical_features=[0])
+```
+
 Supervised tree-style numerical binning is available for binary targets:
 ```python
 from fastwoe import WoePreprocessor

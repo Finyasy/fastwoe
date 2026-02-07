@@ -110,6 +110,21 @@ def test_preprocessor_numeric_kmeans_binning() -> None:
     assert len(labels) >= 2
 
 
+def test_preprocessor_numeric_faiss_binning_optional() -> None:
+    rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
+    pre = WoePreprocessor(n_bins=3, binning_method="faiss")
+
+    try:
+        out = pre.fit_transform(rows, numerical_features=[0])
+    except RuntimeError as exc:
+        assert "faiss is required" in str(exc)
+        return
+
+    labels = {r[0] for r in out}
+    assert labels.issubset({"bin_0", "bin_1", "bin_2", "__missing__"})
+    assert len(labels) >= 2
+
+
 def test_preprocessor_numeric_and_categorical_integration() -> None:
     rows = [
         [1000.0, "A"],
