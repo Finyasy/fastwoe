@@ -48,6 +48,11 @@ In-scope methods for parity fixtures:
 - `transform_matrix_multiclass`, `get_feature_names_multiclass`
 - `get_class_labels`, `get_feature_mapping_multiclass`
 
+- Preprocessor:
+- `fit`, `transform`, `fit_transform`, `get_reduction_summary`
+- Numeric binning scenarios for `quantile`, `kmeans`, `tree`
+- Monotonic numerical constraints (`increasing`)
+
 ## 5) Acceptance Checklist
 - Fixture generation script produces deterministic fixture JSON.
 - Parity contract tests pass against current Rust+PyO3 package.
