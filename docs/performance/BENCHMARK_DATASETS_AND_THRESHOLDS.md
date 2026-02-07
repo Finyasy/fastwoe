@@ -72,6 +72,18 @@ Initial acceptance thresholds on Apple Silicon (local reference):
 These are starting baselines for regression detection, not hard cross-machine SLAs.
 Thresholds were tightened on **February 7, 2026** after the first green CI-equivalent validation cycle.
 
+### CI Push-Safe Thresholds
+To reduce false negatives on shared GitHub runners, `CI / Benchmark Smoke` uses
+more conservative push-time thresholds:
+- `binary_transform/transform_matrix/10000`: `>= 12.0M elems/s`
+- `preprocessor_numeric/transform_quantile/10000`: `>= 6.0M elems/s`
+- `preprocessor_numeric/fit_kmeans/10000`: `>= 8.0M elems/s`
+- `preprocessor_numeric/fit_tree/10000`: `>= 10.0M elems/s`
+- End-to-end latency (`kmeans`, 10k): preprocess `<= 250 ms`, e2e `<= 350 ms`
+- End-to-end latency (`tree`, 10k): preprocess `<= 250 ms`, e2e `<= 330 ms`
+
+Stricter thresholds remain enforced in scheduled benchmark workflows.
+
 ## 4) FAISS Integration Decision Rule
 - Keep FAISS optional unless benchmarks show clear gain on representative workloads.
 - Promote FAISS to Rust-core implementation only when both are true versus `kmeans`:
