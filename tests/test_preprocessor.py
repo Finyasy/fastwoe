@@ -125,6 +125,17 @@ def test_preprocessor_numeric_faiss_binning_optional() -> None:
     assert len(labels) >= 2
 
 
+def test_preprocessor_numeric_faiss_binning_executes_when_faiss_available() -> None:
+    pytest.importorskip("faiss")
+    rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
+    pre = WoePreprocessor(n_bins=3, binning_method="faiss")
+    out = pre.fit_transform(rows, numerical_features=[0])
+
+    labels = {r[0] for r in out}
+    assert labels.issubset({"bin_0", "bin_1", "bin_2", "__missing__"})
+    assert len(labels) >= 2
+
+
 def test_preprocessor_numeric_and_categorical_integration() -> None:
     rows = [
         [1000.0, "A"],
@@ -251,3 +262,144 @@ def test_preprocessor_monotonic_constraints_enforce_decreasing_event_rate() -> N
     rates = [sum(by_bin[i]) / len(by_bin[i]) for i in sorted(by_bin)]
     assert len(rates) >= 1
     assert all(rates[i] >= rates[i + 1] for i in range(len(rates) - 1))
+
+
+def test_preprocessor_rust_backend_parity_when_available() -> None:
+    if not hasattr(fastwoe_mod, "RustPreprocessor"):
+        pytest.skip("RustPreprocessor not available in current extension build.")
+
+    rows = [
+        [1000.0, "A"],
+        [1100.0, "A"],
+        [1200.0, "B"],
+        [1300.0, "C"],
+        [1400.0, "D"],
+        [1500.0, None],
+    ]
+    kwargs = {
+        "top_p": 0.7,
+        "min_count": 1,
+        "n_bins": 3,
+        "binning_method": "quantile",
+    }
+
+    pre_rust = WoePreprocessor(**kwargs)
+    out_rust = pre_rust.fit_transform(rows, numerical_features=[0], cat_features=[1])
+    summary_rust = pre_rust.get_reduction_summary()
+
+    pre_python = WoePreprocessor(**kwargs)
+    pre_python._rust_backend = None
+    pre_python._rust_numeric_backend = None
+    out_python = pre_python.fit_transform(rows, numerical_features=[0], cat_features=[1])
+    summary_python = pre_python.get_reduction_summary()
+
+    assert out_rust == out_python
+    assert summary_rust == summary_python
+
+
+def test_preprocessor_rust_numeric_backend_quantile_parity_when_available() -> None:
+    if not hasattr(fastwoe_mod, "RustNumericBinner"):
+        pytest.skip("RustNumericBinner not available in current extension build.")
+
+    rows = [
+        [1.0, "A"],
+        [2.0, "B"],
+        [3.0, "C"],
+        [4.0, "D"],
+        [5.0, "E"],
+        [None, "F"],
+    ]
+    kwargs = {
+        "n_bins": 3,
+        "binning_method": "quantile",
+        "top_p": 1.0,
+        "min_count": 1,
+    }
+
+    pre_rust = WoePreprocessor(**kwargs)
+    out_rust = pre_rust.fit_transform(rows, numerical_features=[0], cat_features=[1])
+    summary_rust = pre_rust.get_reduction_summary()
+
+    pre_python = WoePreprocessor(**kwargs)
+    pre_python._rust_backend = None
+    pre_python._rust_numeric_backend = None
+    out_python = pre_python.fit_transform(rows, numerical_features=[0], cat_features=[1])
+    summary_python = pre_python.get_reduction_summary()
+
+    assert out_rust == out_python
+    assert summary_rust == summary_python
+
+
+def test_preprocessor_rust_numeric_backend_monotonic_parity_when_available() -> None:
+    if not hasattr(fastwoe_mod, "RustNumericBinner"):
+        pytest.skip("RustNumericBinner not available in current extension build.")
+
+    rows = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0], [7.0], [8.0]]
+    target = [0, 0, 1, 1, 0, 0, 1, 1]
+    kwargs = {
+        "n_bins": 4,
+        "binning_method": "quantile",
+    }
+
+    pre_rust = WoePreprocessor(**kwargs)
+    out_rust = pre_rust.fit_transform(
+        rows,
+        numerical_features=[0],
+        target=target,
+        monotonic_constraints="increasing",
+    )
+
+    pre_python = WoePreprocessor(**kwargs)
+    pre_python._rust_backend = None
+    pre_python._rust_numeric_backend = None
+    out_python = pre_python.fit_transform(
+        rows,
+        numerical_features=[0],
+        target=target,
+        monotonic_constraints="increasing",
+    )
+
+    assert out_rust == out_python
+
+
+def test_preprocessor_rust_numeric_backend_kmeans_parity_when_available() -> None:
+    if not hasattr(fastwoe_mod, "RustNumericBinner"):
+        pytest.skip("RustNumericBinner not available in current extension build.")
+
+    rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
+    kwargs = {
+        "n_bins": 3,
+        "binning_method": "kmeans",
+    }
+
+    pre_rust = WoePreprocessor(**kwargs)
+    out_rust = pre_rust.fit_transform(rows, numerical_features=[0])
+
+    pre_python = WoePreprocessor(**kwargs)
+    pre_python._rust_backend = None
+    pre_python._rust_numeric_backend = None
+    out_python = pre_python.fit_transform(rows, numerical_features=[0])
+
+    assert out_rust == out_python
+
+
+def test_preprocessor_rust_numeric_backend_tree_parity_when_available() -> None:
+    if not hasattr(fastwoe_mod, "RustNumericBinner"):
+        pytest.skip("RustNumericBinner not available in current extension build.")
+
+    rows = [[1.0], [2.0], [3.0], [100.0], [110.0], [120.0]]
+    target = [0, 0, 0, 1, 1, 1]
+    kwargs = {
+        "n_bins": 2,
+        "binning_method": "tree",
+    }
+
+    pre_rust = WoePreprocessor(**kwargs)
+    out_rust = pre_rust.fit_transform(rows, numerical_features=[0], target=target)
+
+    pre_python = WoePreprocessor(**kwargs)
+    pre_python._rust_backend = None
+    pre_python._rust_numeric_backend = None
+    out_python = pre_python.fit_transform(rows, numerical_features=[0], target=target)
+
+    assert out_rust == out_python
