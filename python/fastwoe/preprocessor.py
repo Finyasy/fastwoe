@@ -12,6 +12,17 @@ from importlib import import_module
 from types import ModuleType
 from typing import Any
 
+try:
+    from .fastwoe_rs import (
+        RustNumericBinner as _RustNumericBinner,
+    )
+    from .fastwoe_rs import (
+        RustPreprocessor as _RustPreprocessor,
+    )
+except Exception:  # pragma: no cover - Rust extension is expected in normal usage.
+    _RustNumericBinner = None
+    _RustPreprocessor = None
+
 
 @dataclass
 class _InputMeta:
@@ -73,6 +84,27 @@ class WoePreprocessor:
         self._allowed: dict[int, set[str]] = {}
         self._fit_counts: dict[int, OrderedDict[str, int]] = {}
         self._summary_rows: list[dict[str, Any]] = []
+        self._rust_backend: Any = None
+        self._rust_numeric_backend: Any = None
+        if _RustPreprocessor is not None:
+            self._rust_backend = _RustPreprocessor(
+                max_categories=max_categories,
+                top_p=top_p,
+                min_count=min_count,
+                other_token=other_token,
+                missing_token=missing_token,
+            )
+        if _RustNumericBinner is not None and self.binning_method in {
+            "quantile",
+            "uniform",
+            "kmeans",
+            "tree",
+        }:
+            self._rust_numeric_backend = _RustNumericBinner(
+                n_bins=n_bins,
+                binning_method=binning_method,
+                missing_token=missing_token,
+            )
 
     def fit(
         self,
@@ -108,79 +140,119 @@ class WoePreprocessor:
         if needs_target:
             target_rows = _coerce_binary_target(target, expected_len=len(rows))
 
-        # Learn numeric bin edges first.
-        for idx in self._numeric_idxs:
-            numeric_values: list[float] = []
-            numeric_targets: list[int] = []
-            for row_idx, row in enumerate(rows):
-                parsed = _try_float(row[idx])
-                if parsed is None:
-                    continue
-                numeric_values.append(parsed)
-                if target_rows is not None:
-                    numeric_targets.append(target_rows[row_idx])
-            edges = _compute_bin_edges(
-                numeric_values,
-                n_bins=self.n_bins,
-                method=self.binning_method,
-                targets=numeric_targets if target_rows is not None else None,
+        rows_for_cat: list[list[Any]]
+        if self._rust_numeric_backend is not None and self._numeric_idxs:
+            monotonic_pairs = sorted(monotonic_map.items())
+            backend_rows = self._to_numeric_backend_rows(rows)
+            self._rust_numeric_backend.fit(
+                backend_rows,
+                self._feature_names,
+                self._numeric_idxs,
+                target_rows,
+                monotonic_pairs if monotonic_pairs else None,
             )
-            if idx in monotonic_map:
-                if target_rows is None:
-                    raise RuntimeError(
-                        "Internal error: target must be available for monotonic mode."
-                    )
-                edges = _enforce_monotonic_edges(
+            numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            rows_for_cat = _merge_numeric_backend_rows(
+                rows, numeric_backend_out, self._numeric_idxs
+            )
+            self._summary_rows.extend(
+                _summary_rows_to_dicts(self._rust_numeric_backend.get_reduction_summary())
+            )
+        else:
+            # Learn numeric bin edges first.
+            for idx in self._numeric_idxs:
+                numeric_values: list[float] = []
+                numeric_targets: list[int] = []
+                for row_idx, row in enumerate(rows):
+                    parsed = _try_float(row[idx])
+                    if parsed is None:
+                        continue
+                    numeric_values.append(parsed)
+                    if target_rows is not None:
+                        numeric_targets.append(target_rows[row_idx])
+                edges = _compute_bin_edges(
                     numeric_values,
-                    numeric_targets,
-                    edges,
-                    direction=monotonic_map[idx],
+                    n_bins=self.n_bins,
+                    method=self.binning_method,
+                    targets=numeric_targets if target_rows is not None else None,
                 )
-            self._numeric_edges[idx] = edges
-            unique_non_missing = len(set(numeric_values))
-            self._summary_rows.append(
-                {
-                    "feature": self._feature_names[idx],
-                    "original_unique": unique_non_missing,
-                    "reduced_unique": max(1, len(edges) - 1),
-                    "coverage": 1.0,
-                }
-            )
+                if idx in monotonic_map:
+                    if target_rows is None:
+                        raise RuntimeError(
+                            "Internal error: target must be available for monotonic mode."
+                        )
+                    edges = _enforce_monotonic_edges(
+                        numeric_values,
+                        numeric_targets,
+                        edges,
+                        direction=monotonic_map[idx],
+                    )
+                self._numeric_edges[idx] = edges
+                unique_non_missing = len(set(numeric_values))
+                self._summary_rows.append(
+                    {
+                        "feature": self._feature_names[idx],
+                        "original_unique": unique_non_missing,
+                        "reduced_unique": max(1, len(edges) - 1),
+                        "coverage": 1.0,
+                    }
+                )
+            rows_for_cat = self._apply_numeric_binning(rows)
+        if self._rust_backend is not None and self._selected_idxs:
+            backend_rows = self._to_backend_rows(rows_for_cat)
+            self._rust_backend.fit(backend_rows, self._feature_names, self._selected_idxs)
+            backend_summary = self._rust_backend.get_reduction_summary()
+            self._summary_rows.extend(_summary_rows_to_dicts(backend_summary))
+        else:
+            for idx in self._selected_idxs:
+                counts = OrderedDict()
+                for row in rows_for_cat:
+                    category = self._normalize_value(row[idx])
+                    counts[category] = counts.get(category, 0) + 1
 
-        rows_for_cat = self._apply_numeric_binning(rows)
+                sorted_counts = OrderedDict(
+                    sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                )
+                total = sum(sorted_counts.values())
+                keep = self._select_categories(sorted_counts, total)
 
-        for idx in self._selected_idxs:
-            counts = OrderedDict()
-            for row in rows_for_cat:
-                category = self._normalize_value(row[idx])
-                counts[category] = counts.get(category, 0) + 1
-
-            sorted_counts = OrderedDict(
-                sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-            )
-            total = sum(sorted_counts.values())
-            keep = self._select_categories(sorted_counts, total)
-
-            self._fit_counts[idx] = sorted_counts
-            self._allowed[idx] = keep
-            kept_count = sum(sorted_counts.get(cat, 0) for cat in keep)
-            self._summary_rows.append(
-                {
-                    "feature": self._feature_names[idx],
-                    "original_unique": len(sorted_counts),
-                    "reduced_unique": len(keep) + 1,  # + __other__
-                    "coverage": kept_count / total if total else 0.0,
-                }
-            )
+                self._fit_counts[idx] = sorted_counts
+                self._allowed[idx] = keep
+                kept_count = sum(sorted_counts.get(cat, 0) for cat in keep)
+                self._summary_rows.append(
+                    {
+                        "feature": self._feature_names[idx],
+                        "original_unique": len(sorted_counts),
+                        "reduced_unique": len(keep) + 1,  # + __other__
+                        "coverage": kept_count / total if total else 0.0,
+                    }
+                )
 
         self._fitted = True
         return self
 
     def transform(self, X: Any) -> Any:
         self._require_fitted()
-        rows, meta = _coerce_rows(X)
-        rows = self._apply_numeric_binning(rows)
+        rows_raw, meta = _coerce_rows(X)
+        if self._rust_numeric_backend is not None and self._numeric_idxs and rows_raw:
+            backend_rows = self._to_numeric_backend_rows(rows_raw)
+            numeric_backend_out = self._rust_numeric_backend.transform(backend_rows)
+            rows = _merge_numeric_backend_rows(
+                rows_raw, numeric_backend_out, self._numeric_idxs
+            )
+        else:
+            rows = self._apply_numeric_binning(rows_raw)
         transformed = []
+
+        if self._rust_backend is not None and self._selected_idxs and rows:
+            backend_rows = self._to_backend_rows(rows)
+            backend_out = self._rust_backend.transform(backend_rows)
+            for row, backend_row in zip(rows, backend_out):
+                out_row = list(row)
+                for idx in self._selected_idxs:
+                    out_row[idx] = backend_row[idx]
+                transformed.append(out_row)
+            return _restore_output(transformed, meta)
 
         for row in rows:
             out_row = list(row)
@@ -264,6 +336,34 @@ class WoePreprocessor:
 
         return set(keep)
 
+    def _to_backend_rows(self, rows: list[list[Any]]) -> list[list[str]]:
+        selected = set(self._selected_idxs)
+        out: list[list[str]] = []
+        for row in rows:
+            out_row: list[str] = []
+            for idx, value in enumerate(row):
+                if idx in selected:
+                    out_row.append(self._normalize_value(value))
+                else:
+                    out_row.append(str(value))
+            out.append(out_row)
+        return out
+
+    def _to_numeric_backend_rows(self, rows: list[list[Any]]) -> list[list[str]]:
+        out: list[list[str]] = []
+        for row in rows:
+            out_row: list[str] = []
+            for value in row:
+                if value is None:
+                    out_row.append(self.missing_token)
+                    continue
+                if isinstance(value, float) and math.isnan(value):
+                    out_row.append(self.missing_token)
+                    continue
+                out_row.append(str(value))
+            out.append(out_row)
+        return out
+
     def _require_fitted(self) -> None:
         if not self._fitted:
             raise RuntimeError("WoePreprocessor is not fitted. Call fit() first.")
@@ -328,6 +428,39 @@ def _restore_output(rows: list[list[Any]], meta: _InputMeta) -> Any:
     if meta.is_1d:
         return [r[0] for r in rows]
     return rows
+
+
+def _summary_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "feature": row.feature,
+                "original_unique": row.original_unique,
+                "reduced_unique": row.reduced_unique,
+                "coverage": row.coverage,
+            }
+        )
+    return out
+
+
+def _merge_numeric_backend_rows(
+    original_rows: list[list[Any]],
+    numeric_backend_rows: list[list[str]],
+    numeric_idxs: list[int],
+) -> list[list[Any]]:
+    if len(original_rows) != len(numeric_backend_rows):
+        raise RuntimeError("Rust numeric backend row count mismatch.")
+
+    out: list[list[Any]] = []
+    for original_row, backend_row in zip(original_rows, numeric_backend_rows):
+        if len(original_row) != len(backend_row):
+            raise RuntimeError("Rust numeric backend column count mismatch.")
+        merged = list(original_row)
+        for idx in numeric_idxs:
+            merged[idx] = backend_row[idx]
+        out.append(merged)
+    return out
 
 
 def _resolve_feature_indices(cat_features: Any, feature_names: list[str]) -> list[int]:
