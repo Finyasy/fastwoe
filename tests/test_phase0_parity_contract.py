@@ -9,6 +9,7 @@ import pytest
 
 fastwoe_mod = pytest.importorskip("fastwoe")
 FastWoe = fastwoe_mod.FastWoe
+WoePreprocessor = fastwoe_mod.WoePreprocessor
 
 FIXTURE_PATH = Path("tests/fixtures/parity/phase0_v1.json")
 
@@ -118,6 +119,28 @@ def test_multiclass_phase0_parity_contract() -> None:
         abs_tol=1e-9,
         rel_tol=1e-9,
     )
+
+
+def test_preprocessor_phase0_parity_contract() -> None:
+    fixture = _load_fixture()["preprocessor"]
+
+    for _, case in fixture.items():
+        pre = WoePreprocessor(**case["params"])
+        transformed = pre.fit_transform(case["rows"], **case["fit_kwargs"])
+        summary = pre.get_reduction_summary()
+
+        _assert_deep_close(
+            transformed,
+            case["transformed"],
+            abs_tol=1e-9,
+            rel_tol=1e-9,
+        )
+        _assert_deep_close(
+            summary,
+            case["summary"],
+            abs_tol=1e-12,
+            rel_tol=1e-12,
+        )
 
 
 def _iv_rows_to_dict(rows: list[Any]) -> list[dict]:
