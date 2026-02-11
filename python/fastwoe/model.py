@@ -664,8 +664,14 @@ def _is_pandas_frame(value: Any) -> bool:
 
 
 def _extract_index(value: Any) -> Any:
-    if hasattr(value, "index"):
+    if _is_pandas_frame(value):
         return value.index
+
+    # Python lists expose a callable `.index` method, which is not a pandas Index.
+    # Guard against treating methods as row indexes for as_frame outputs.
+    index_attr = getattr(value, "index", None)
+    if index_attr is not None and not callable(index_attr):
+        return index_attr
     return None
 
 

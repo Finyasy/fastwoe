@@ -71,6 +71,15 @@ mapping = model.get_mapping()
 
 `FastWoe` accepts Python lists, NumPy arrays, pandas Series, and pandas DataFrames.
 
+Optional local-build verification:
+```python
+import fastwoe
+import fastwoe.fastwoe_rs as rs
+
+print("fastwoe package:", fastwoe.__file__)
+print("extension:", rs.__file__)
+```
+
 ## Multi-Feature API (Categorical Matrix)
 ```python
 from fastwoe import FastWoe
@@ -143,6 +152,9 @@ strong feature dependence or ultra-sparse categorical patterns in training data.
 ```python
 from fastwoe import FastWoe
 
+rows = [["A", "x"], ["A", "y"], ["B", "x"], ["C", "z"]]
+target = [1, 0, 0, 1]
+
 model = FastWoe()
 model.fit_matrix(rows, target, feature_names=["f0", "f1"])
 diagnostics = model.get_assumption_diagnostics()
@@ -190,6 +202,49 @@ summary = pre.get_reduction_summary()
 
 model = FastWoe()
 model.fit_matrix(rows_reduced, [1, 0, 0, 1], feature_names=["merchant", "segment"])
+```
+
+## End-to-End DataFrame Workflow (Preprocess + WOE + Mapping)
+```python
+import numpy as np
+import pandas as pd
+from fastwoe import FastWoe, WoePreprocessor
+
+np.random.seed(42)
+n = 350
+data = pd.DataFrame({
+    "category": np.random.choice(["A", "B", "C", "D"], size=n, p=[0.35, 0.30, 0.25, 0.10]),
+    "high_card_cat": [f"cat_{i}" for i in np.random.randint(0, 50, size=n)],
+    "target": np.random.binomial(1, 0.3, size=n),
+})
+
+pre = WoePreprocessor(max_categories=10, min_count=5)
+X = pre.fit_transform(
+    data[["category", "high_card_cat"]],
+    cat_features=["high_card_cat"],
+)
+
+woe = FastWoe()
+X_woe = woe.fit_transform_matrix(
+    X,
+    data["target"],
+    feature_names=["category", "high_card_cat"],
+    as_frame=True,
+)
+
+rows = woe.get_feature_mapping("category")
+mapping_df = pd.DataFrame([
+    {
+        "category": r.category,
+        "event_count": r.event_count,
+        "non_event_count": r.non_event_count,
+        "woe": r.woe,
+        "woe_se": r.woe_se,
+    }
+    for r in rows
+])
+mapping_df["count"] = mapping_df["event_count"] + mapping_df["non_event_count"]
+mapping_df["event_rate"] = mapping_df["event_count"] / mapping_df["count"]
 ```
 
 The categorical reduction path is backed by Rust (`PreprocessorCore`) when the extension is built.
@@ -266,6 +321,7 @@ model.fit_matrix(X, y, feature_names=X.columns)
 
 X_woe_df = model.transform_matrix(X, as_frame=True)
 ci_df = model.predict_ci_matrix(X, as_frame=True)
+model.fit_matrix_multiclass(X, ["c0", "c1"], feature_names=X.columns)
 proba_multi_df = model.predict_proba_matrix_multiclass(X, as_frame=True)
 ```
 

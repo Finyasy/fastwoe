@@ -35,3 +35,33 @@ def test_fit_matrix_multiclass_rejects_duplicate_feature_names() -> None:
 
     with pytest.raises(ValueError, match="feature_names must be unique"):
         model.fit_matrix_multiclass(rows, labels, feature_names=["dup", "dup"])
+
+
+def test_as_frame_works_for_list_input_single_feature() -> None:
+    pd = pytest.importorskip("pandas")
+
+    model = FastWoe()
+    out = model.fit_transform(["A", "A", "B", "C"], [1, 0, 0, 1], as_frame=True)
+
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["woe"]
+    assert out.shape == (4, 1)
+
+
+def test_as_frame_works_for_list_input_matrix_api() -> None:
+    pd = pytest.importorskip("pandas")
+
+    rows = [["A", "x"], ["A", "y"], ["B", "x"], ["C", "z"]]
+    target = [1, 0, 0, 1]
+    model = FastWoe()
+
+    out = model.fit_transform_matrix(
+        rows,
+        target,
+        feature_names=["cat", "bucket"],
+        as_frame=True,
+    )
+
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["cat", "bucket"]
+    assert out.shape == (4, 2)
