@@ -18,8 +18,6 @@ Release date: February 11, 2026
 - Added strict binary-target validation in Python wrappers to prevent silent
   coercion of non-binary values.
 - Added duplicate `feature_names` validation in both Python and Rust paths.
-- Added pytest path pinning to prefer local source-tree imports during
-  repository test runs.
 
 ## Breaking Changes
 
