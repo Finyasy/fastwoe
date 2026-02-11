@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -797,10 +798,13 @@ def _compute_faiss_kmeans_bin_edges(
 
     faiss = _try_import_faiss()
     if faiss is None:
-        raise RuntimeError(
-            "faiss is required for binning_method='faiss'. "
-            "Install faiss-cpu or use binning_method='kmeans'."
+        warnings.warn(
+            "faiss import failed for binning_method='faiss'; "
+            "falling back to binning_method='kmeans'.",
+            RuntimeWarning,
+            stacklevel=2,
         )
+        return _compute_kmeans_bin_edges(values, n_bins=n_bins)
 
     arr = np.array(values, dtype="float32")
     vmin = float(np.min(arr))
@@ -814,9 +818,18 @@ def _compute_faiss_kmeans_bin_edges(
         return [vmin, vmax]
 
     train_x = np.ascontiguousarray(arr.reshape(-1, 1), dtype="float32")
-    kmeans = faiss.Kmeans(d=1, k=k, niter=max_iter, verbose=False, seed=42)
-    kmeans.train(train_x)
-    centroids = np.ascontiguousarray(kmeans.centroids.reshape(-1), dtype="float32")
+    try:
+        kmeans = faiss.Kmeans(d=1, k=k, niter=max_iter, verbose=False, seed=42)
+        kmeans.train(train_x)
+        centroids = np.ascontiguousarray(kmeans.centroids.reshape(-1), dtype="float32")
+    except Exception as exc:
+        warnings.warn(
+            "faiss numerical binning failed; "
+            f"falling back to binning_method='kmeans' ({exc!s}).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return _compute_kmeans_bin_edges(values, n_bins=n_bins)
     centers = np.array(sorted(set(float(c) for c in centroids.tolist())), dtype=float)
 
     if centers.size < 2:

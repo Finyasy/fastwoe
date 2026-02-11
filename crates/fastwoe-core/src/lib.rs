@@ -16,6 +16,8 @@ pub enum WoeError {
     InvalidMatrixShape,
     #[error("feature_names length must match number of columns")]
     FeatureNameCountMismatch,
+    #[error("feature_names must be unique; duplicate found: {0}")]
+    DuplicateFeatureName(String),
     #[error("unknown feature: {0}")]
     UnknownFeature(String),
     #[error("class labels must be non-empty")]
@@ -1251,7 +1253,16 @@ fn resolve_feature_names(
 ) -> Result<Vec<String>, WoeError> {
     match feature_names {
         Some(names) if names.len() != ncols => Err(WoeError::FeatureNameCountMismatch),
-        Some(names) => Ok(names.to_vec()),
+        Some(names) => {
+            let mut seen: HashSet<&str> = HashSet::with_capacity(names.len());
+            for name in names {
+                let key = name.as_str();
+                if !seen.insert(key) {
+                    return Err(WoeError::DuplicateFeatureName(name.clone()));
+                }
+            }
+            Ok(names.to_vec())
+        }
         None => Ok((0..ncols).map(|i| format!("feature_{i}")).collect()),
     }
 }

@@ -3,6 +3,19 @@
 This note documents migration guidance from legacy Python-only usage to the
 Rust + PyO3 implementation, plus current limitations that are intentional.
 
+## Release 0.1.9 Additions
+
+- PyO3 row objects now render cleanly in Python/Jupyter:
+  - `WoeRow`
+  - `IvRow`
+  - `ReductionSummaryRow`
+- IV row string output uses generic confidence-interval labeling (`CI=[...]`)
+  instead of a hardcoded `95%CI` label.
+- Binary-target validation is stricter in Python wrappers:
+  non-binary values are rejected instead of being silently coerced.
+- Duplicate `feature_names` are now rejected in matrix APIs.
+- Added representation and input-validation regression tests.
+
 ## Release 0.1.2 Additions
 
 - `FastWoe` now emits assumption-risk warnings (dependence/sparsity) on

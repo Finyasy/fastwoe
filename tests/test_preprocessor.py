@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from importlib import import_module
 
 import pytest
 
@@ -145,12 +146,23 @@ def test_preprocessor_numeric_kmeans_binning() -> None:
 def test_preprocessor_numeric_faiss_binning_optional() -> None:
     rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
     pre = WoePreprocessor(n_bins=3, binning_method="faiss")
+    out = pre.fit_transform(rows, numerical_features=[0])
 
-    try:
+    labels = {r[0] for r in out}
+    assert labels.issubset({"bin_0", "bin_1", "bin_2", "__missing__"})
+    assert len(labels) >= 2
+
+
+def test_preprocessor_numeric_faiss_binning_falls_back_to_kmeans_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preprocessor_mod = import_module("fastwoe.preprocessor")
+    monkeypatch.setattr(preprocessor_mod, "_try_import_faiss", lambda: None)
+
+    rows = [[0.0], [0.2], [0.3], [10.0], [10.1], [10.3], [20.0], [20.1]]
+    pre = WoePreprocessor(n_bins=3, binning_method="faiss")
+    with pytest.warns(RuntimeWarning, match="falling back to binning_method='kmeans'"):
         out = pre.fit_transform(rows, numerical_features=[0])
-    except RuntimeError as exc:
-        assert "faiss is required" in str(exc)
-        return
 
     labels = {r[0] for r in out}
     assert labels.issubset({"bin_0", "bin_1", "bin_2", "__missing__"})

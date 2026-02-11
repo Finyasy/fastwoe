@@ -6,6 +6,7 @@ import math
 import warnings
 from collections import Counter
 from collections.abc import Iterable
+from numbers import Integral
 from typing import Any
 
 from .fastwoe_rs import FastWoe as _RustFastWoe
@@ -315,11 +316,42 @@ class FastWoe:
 def _to_feature_names(value: Any) -> list[str] | None:
     if value is None:
         return None
-    return [str(v) for v in _to_1d_list(value)]
+    names = [str(v) for v in _to_1d_list(value)]
+    seen: set[str] = set()
+    for name in names:
+        if name in seen:
+            raise ValueError(f"feature_names must be unique; duplicate found: {name}")
+        seen.add(name)
+    return names
 
 
 def _to_u8(value: Any) -> list[int]:
-    return [int(v) for v in _to_1d_list(value)]
+    out: list[int] = []
+    for raw in _to_1d_list(value):
+        if isinstance(raw, bool):
+            out.append(int(raw))
+            continue
+        if isinstance(raw, Integral):
+            candidate = int(raw)
+            if candidate in {0, 1}:
+                out.append(candidate)
+                continue
+            raise ValueError("target must be binary with values in {0, 1}.")
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if stripped in {"0", "1"}:
+                out.append(int(stripped))
+                continue
+            raise ValueError("target must be binary with values in {0, 1}.")
+        if isinstance(raw, float):
+            if math.isnan(raw):
+                raise ValueError("target must be binary with values in {0, 1}.")
+            if raw in {0.0, 1.0}:
+                out.append(int(raw))
+                continue
+            raise ValueError("target must be binary with values in {0, 1}.")
+        raise ValueError("target must be binary with values in {0, 1}.")
+    return out
 
 
 def _to_1d_str(value: Any) -> list[str]:

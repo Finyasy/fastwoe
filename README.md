@@ -222,6 +222,8 @@ rows = [[0.1], [0.2], [0.3], [10.0], [10.2], [20.0]]
 pre = WoePreprocessor(n_bins=3, binning_method="faiss")
 rows_binned = pre.fit_transform(rows, numerical_features=[0])
 ```
+If `faiss` cannot be imported or fails at runtime (for example, NumPy ABI mismatch),
+FastWoe falls back to `kmeans` and emits a `RuntimeWarning`.
 
 Current benchmark decision: keep FAISS optional (do not move to Rust-core yet).
 See `docs/performance/FAISS_DECISION_BENCHMARK.md` for measured results.

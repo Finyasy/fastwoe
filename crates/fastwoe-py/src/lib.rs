@@ -20,6 +20,23 @@ pub struct WoeRow {
     pub woe_se: f64,
 }
 
+#[pymethods]
+impl WoeRow {
+    fn __repr__(&self) -> String {
+        format!(
+            "WoeRow(category={:?}, event_count={}, non_event_count={}, woe={:.6}, woe_se={:.6})",
+            self.category, self.event_count, self.non_event_count, self.woe, self.woe_se
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "category={} | events={} | non_events={} | woe={:.6} | se={:.6}",
+            self.category, self.event_count, self.non_event_count, self.woe, self.woe_se
+        )
+    }
+}
+
 #[pyclass]
 #[derive(Debug)]
 pub struct IvRow {
@@ -37,6 +54,33 @@ pub struct IvRow {
     pub iv_significance: String,
 }
 
+#[pymethods]
+impl IvRow {
+    fn __repr__(&self) -> String {
+        format!(
+            "IvRow(feature={:?}, iv={:.6}, iv_se={:.6}, ci=({:.6}, {:.6}), significance={})",
+            self.feature,
+            self.iv,
+            self.iv_se,
+            self.iv_ci_lower,
+            self.iv_ci_upper,
+            self.iv_significance
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "feature={} | iv={:.6} | se={:.6} | CI=[{:.6}, {:.6}] | sig={}",
+            self.feature,
+            self.iv,
+            self.iv_se,
+            self.iv_ci_lower,
+            self.iv_ci_upper,
+            self.iv_significance
+        )
+    }
+}
+
 #[pyclass]
 #[derive(Debug)]
 pub struct ReductionSummaryRow {
@@ -48,6 +92,29 @@ pub struct ReductionSummaryRow {
     pub reduced_unique: usize,
     #[pyo3(get)]
     pub coverage: f64,
+}
+
+#[pymethods]
+impl ReductionSummaryRow {
+    fn __repr__(&self) -> String {
+        format!(
+            "ReductionSummaryRow(feature={:?}, original={}, reduced={}, coverage={:.2}%)",
+            self.feature,
+            self.original_unique,
+            self.reduced_unique,
+            self.coverage * 100.0
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "feature={} | original={} unique | reduced={} unique | {:.1}% coverage",
+            self.feature,
+            self.original_unique,
+            self.reduced_unique,
+            self.coverage * 100.0
+        )
+    }
 }
 
 #[pyclass]
