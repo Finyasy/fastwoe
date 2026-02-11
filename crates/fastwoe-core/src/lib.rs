@@ -116,6 +116,22 @@ pub fn compute_binary_woe(
         }
     }
 
+    compute_binary_woe_from_counts(counts, total_events, total_non_events, smoothing)
+}
+
+fn compute_binary_woe_from_counts(
+    counts: HashMap<String, (usize, usize)>,
+    total_events: usize,
+    total_non_events: usize,
+    smoothing: f64,
+) -> Result<Vec<CategoryStats>, WoeError> {
+    if smoothing <= 0.0 {
+        return Err(WoeError::InvalidSmoothing);
+    }
+    if counts.is_empty() {
+        return Err(WoeError::EmptyInput);
+    }
+
     let k = counts.len() as f64;
     let denom_events = total_events as f64 + smoothing * k;
     let denom_non_events = total_non_events as f64 + smoothing * k;
@@ -138,7 +154,6 @@ pub fn compute_binary_woe(
         });
     }
     out.sort_by(|a, b| a.category.cmp(&b.category));
-
     Ok(out)
 }
 
@@ -680,18 +695,21 @@ impl BinaryTabularWoeModel {
         }
     }
 
-    pub fn fit_matrix(
+    fn set_fitted_state_from_stats(
         &mut self,
-        rows: &[Vec<String>],
+        feature_names: Vec<String>,
         targets: &[u8],
-        feature_names: Option<&[String]>,
+        feature_stats: Vec<Vec<CategoryStats>>,
     ) -> Result<(), WoeError> {
-        if self.smoothing <= 0.0 {
-            return Err(WoeError::InvalidSmoothing);
+        if feature_names.is_empty() || feature_stats.is_empty() {
+            return Err(WoeError::EmptyInput);
         }
-        validate_binary_targets(targets)?;
-        let ncols = validate_matrix(rows, Some(targets.len()))?;
-        self.feature_names = resolve_feature_names(feature_names, ncols)?;
+        if feature_names.len() != feature_stats.len() {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+        if targets.is_empty() {
+            return Err(WoeError::EmptyInput);
+        }
 
         let n = targets.len() as f64;
         let event_rate = targets.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
@@ -700,6 +718,7 @@ impl BinaryTabularWoeModel {
         self.n_samples = targets.len();
         self.total_events = targets.iter().filter(|&&v| v == 1).count();
         self.total_non_events = self.n_samples.saturating_sub(self.total_events);
+        self.feature_names = feature_names;
 
         self.feature_index = self
             .feature_names
@@ -719,12 +738,7 @@ impl BinaryTabularWoeModel {
         self.feature_stats.reserve(self.feature_names.len());
         self.feature_iv_stats.reserve(self.feature_names.len());
 
-        for col_idx in 0..self.feature_names.len() {
-            let categories = rows
-                .iter()
-                .map(|row| row[col_idx].clone())
-                .collect::<Vec<String>>();
-            let stats = compute_binary_woe(&categories, targets, self.smoothing)?;
+        for (col_idx, stats) in feature_stats.into_iter().enumerate() {
             let woe_mapping = stats
                 .iter()
                 .map(|s| (s.category.clone(), s.woe))
@@ -750,8 +764,145 @@ impl BinaryTabularWoeModel {
             self.feature_stats.push(stats);
             self.feature_iv_stats.push(iv_stats);
         }
-
         Ok(())
+    }
+
+    pub fn fit_single_feature(
+        &mut self,
+        categories: &[String],
+        targets: &[u8],
+        feature_name: &str,
+    ) -> Result<(), WoeError> {
+        if self.smoothing <= 0.0 {
+            return Err(WoeError::InvalidSmoothing);
+        }
+        validate_binary_targets(targets)?;
+        if categories.is_empty() {
+            return Err(WoeError::EmptyInput);
+        }
+        if categories.len() != targets.len() {
+            return Err(WoeError::LengthMismatch);
+        }
+        let stats = compute_binary_woe(categories, targets, self.smoothing)?;
+        self.set_fitted_state_from_stats(vec![feature_name.to_string()], targets, vec![stats])
+    }
+
+    pub fn transform_single_feature(&self, categories: &[String]) -> Result<Vec<f64>, WoeError> {
+        if self.base_log_odds.is_none() {
+            return Err(WoeError::NotFitted);
+        }
+        if self.feature_mappings.len() != 1 {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+        let mapping = &self.feature_mappings[0];
+        Ok(categories
+            .iter()
+            .map(|value| mapping.get(value).copied().unwrap_or(self.default_woe))
+            .collect())
+    }
+
+    pub fn fit_transform_single_feature(
+        &mut self,
+        categories: &[String],
+        targets: &[u8],
+        feature_name: &str,
+    ) -> Result<Vec<f64>, WoeError> {
+        self.fit_single_feature(categories, targets, feature_name)?;
+        self.transform_single_feature(categories)
+    }
+
+    pub fn predict_proba_single_feature(
+        &self,
+        categories: &[String],
+    ) -> Result<Vec<f64>, WoeError> {
+        let base = self.base_log_odds.ok_or(WoeError::NotFitted)?;
+        let woe_values = self.transform_single_feature(categories)?;
+        Ok(woe_values
+            .into_iter()
+            .map(|woe| sigmoid(base + woe))
+            .collect())
+    }
+
+    pub fn predict_ci_single_feature(
+        &self,
+        categories: &[String],
+        alpha: f64,
+    ) -> Result<Vec<PredictionCi>, WoeError> {
+        if !(0.0..1.0).contains(&alpha) {
+            return Err(WoeError::InvalidAlpha);
+        }
+        let base = self.base_log_odds.ok_or(WoeError::NotFitted)?;
+        if self.feature_mappings.len() != 1
+            || self.feature_woe_se_mappings.len() != 1
+            || self.fallback_woe_se.len() != 1
+        {
+            return Err(WoeError::FeatureNameCountMismatch);
+        }
+        let z = normal_ppf(1.0 - alpha / 2.0);
+        let mapping = &self.feature_mappings[0];
+        let se_mapping = &self.feature_woe_se_mappings[0];
+        let fallback_se = self.fallback_woe_se[0];
+
+        Ok(categories
+            .iter()
+            .map(|value| {
+                let woe = mapping.get(value).copied().unwrap_or(self.default_woe);
+                let woe_se = se_mapping.get(value).copied().unwrap_or(fallback_se);
+                let center = base + woe;
+                let lower = sigmoid(center - z * woe_se);
+                let upper = sigmoid(center + z * woe_se);
+                PredictionCi {
+                    prediction: sigmoid(center),
+                    lower_ci: lower.min(upper),
+                    upper_ci: lower.max(upper),
+                }
+            })
+            .collect())
+    }
+
+    pub fn fit_matrix(
+        &mut self,
+        rows: &[Vec<String>],
+        targets: &[u8],
+        feature_names: Option<&[String]>,
+    ) -> Result<(), WoeError> {
+        if self.smoothing <= 0.0 {
+            return Err(WoeError::InvalidSmoothing);
+        }
+        validate_binary_targets(targets)?;
+        let ncols = validate_matrix(rows, Some(targets.len()))?;
+        let resolved_feature_names = resolve_feature_names(feature_names, ncols)?;
+
+        let total_events = targets.iter().filter(|&&v| v == 1).count();
+        let total_non_events = targets.len().saturating_sub(total_events);
+        let mut per_feature_counts: Vec<HashMap<String, (usize, usize)>> =
+            (0..ncols).map(|_| HashMap::new()).collect();
+
+        for (row, y) in rows.iter().zip(targets.iter()) {
+            for (col_idx, value) in row.iter().enumerate() {
+                let entry = per_feature_counts[col_idx]
+                    .entry(value.clone())
+                    .or_insert((0, 0));
+                if *y == 1 {
+                    entry.0 += 1;
+                } else {
+                    entry.1 += 1;
+                }
+            }
+        }
+
+        let mut all_feature_stats = Vec::with_capacity(ncols);
+        for counts in per_feature_counts {
+            let stats = compute_binary_woe_from_counts(
+                counts,
+                total_events,
+                total_non_events,
+                self.smoothing,
+            )?;
+            all_feature_stats.push(stats);
+        }
+
+        self.set_fitted_state_from_stats(resolved_feature_names, targets, all_feature_stats)
     }
 
     pub fn transform_matrix(&self, rows: &[Vec<String>]) -> Result<Vec<Vec<f64>>, WoeError> {

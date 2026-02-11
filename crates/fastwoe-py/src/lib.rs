@@ -269,42 +269,33 @@ impl FastWoe {
     }
 
     fn fit(&mut self, categories: Vec<String>, targets: Vec<u8>) -> PyResult<()> {
-        let rows = to_single_feature_rows(&categories);
-        let feature_names = vec![single_feature_name().to_string()];
         self.model
-            .fit_matrix(&rows, &targets, Some(&feature_names))
+            .fit_single_feature(&categories, &targets, single_feature_name())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn transform(&self, categories: Vec<String>) -> PyResult<Vec<f64>> {
-        let rows = to_single_feature_rows(&categories);
         self.model
-            .transform_matrix(&rows)
-            .map(|matrix| matrix.into_iter().map(|row| row[0]).collect())
+            .transform_single_feature(&categories)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn fit_transform(&mut self, categories: Vec<String>, targets: Vec<u8>) -> PyResult<Vec<f64>> {
-        let rows = to_single_feature_rows(&categories);
-        let feature_names = vec![single_feature_name().to_string()];
         self.model
-            .fit_transform_matrix(&rows, &targets, Some(&feature_names))
-            .map(|matrix| matrix.into_iter().map(|row| row[0]).collect())
+            .fit_transform_single_feature(&categories, &targets, single_feature_name())
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     fn predict_proba(&self, categories: Vec<String>) -> PyResult<Vec<f64>> {
-        let rows = to_single_feature_rows(&categories);
         self.model
-            .predict_proba_matrix(&rows)
+            .predict_proba_single_feature(&categories)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     #[pyo3(signature = (categories, alpha=0.05))]
     fn predict_ci(&self, categories: Vec<String>, alpha: f64) -> PyResult<Vec<(f64, f64, f64)>> {
-        let rows = to_single_feature_rows(&categories);
         self.model
-            .predict_ci_matrix(&rows, alpha)
+            .predict_ci_single_feature(&categories, alpha)
             .map(ci_to_tuples)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }

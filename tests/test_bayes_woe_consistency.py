@@ -76,3 +76,35 @@ def test_mapping_respects_woe_formula_and_sign_semantics() -> None:
             assert row.woe > 0.0
         elif category_event_rate < overall_event_rate:
             assert row.woe < 0.0
+
+
+def test_single_feature_api_matches_single_column_matrix_api() -> None:
+    categories = ["A", "A", "B", "C", "A", "B", "D", "D", "C", "A"]
+    target = [1, 0, 0, 1, 1, 0, 1, 0, 0, 1]
+    query = ["A", "B", "C", "D", "Z"]
+
+    model_1d = FastWoe(smoothing=0.5, default_woe=0.0)
+    model_1d.fit(categories, target)
+    transform_1d = model_1d.transform(query)
+    proba_1d = model_1d.predict_proba(query)
+    mapping_1d = {row.category: row for row in model_1d.get_mapping()}
+
+    rows = [[value] for value in categories]
+    query_rows = [[value] for value in query]
+    model_matrix = FastWoe(smoothing=0.5, default_woe=0.0)
+    model_matrix.fit_matrix(rows, target, feature_names=["f0"])
+    transform_matrix = [row[0] for row in model_matrix.transform_matrix(query_rows)]
+    proba_matrix = model_matrix.predict_proba_matrix(query_rows)
+    mapping_matrix = {row.category: row for row in model_matrix.get_feature_mapping("f0")}
+
+    assert transform_1d == pytest.approx(transform_matrix, abs=1e-12, rel=1e-12)
+    assert proba_1d == pytest.approx(proba_matrix, abs=1e-12, rel=1e-12)
+    assert sorted(mapping_1d) == sorted(mapping_matrix)
+
+    for category in sorted(mapping_1d):
+        left = mapping_1d[category]
+        right = mapping_matrix[category]
+        assert left.event_count == right.event_count
+        assert left.non_event_count == right.non_event_count
+        assert left.woe == pytest.approx(right.woe, abs=1e-12, rel=1e-12)
+        assert left.woe_se == pytest.approx(right.woe_se, abs=1e-12, rel=1e-12)
